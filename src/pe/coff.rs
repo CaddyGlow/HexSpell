@@ -23,7 +23,7 @@ pub struct CoffFileHeader {
 impl CoffFileHeader {
     /// Parses a COFF header at `offset` (immediately after `PE\0\0`).
     pub fn parse(buffer: &[u8], offset: usize) -> Result<Self, FileParseError> {
-        if buffer.len() < offset + 20 {
+        if offset.checked_add(20).is_none_or(|end| end > buffer.len()) {
             return Err(FileParseError::BufferOverflow);
         }
 

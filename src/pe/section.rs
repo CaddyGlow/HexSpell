@@ -170,7 +170,7 @@ impl PeSection {
 
     /// Parses a section of a PE file from the given buffer and offset.
     pub fn parse_section(buffer: &[u8], offset: usize) -> Result<Self, errors::FileParseError> {
-        if buffer.len() < offset + 40 {
+        if offset.checked_add(40).is_none_or(|end| end > buffer.len()) {
             return Err(errors::FileParseError::BufferOverflow);
         }
 

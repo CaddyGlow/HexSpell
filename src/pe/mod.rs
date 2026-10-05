@@ -39,6 +39,7 @@ pub mod section;
 pub mod section_reloc;
 pub mod symbol;
 pub mod tls;
+pub mod view;
 
 /// A parsed PE image backed by an owned byte buffer.
 pub struct PE {

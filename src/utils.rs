@@ -11,7 +11,12 @@ use crate::errors::FileParseError;
 /// Reads a little-endian `u64` at `offset`, returning [`FileParseError::BufferOverflow`] on truncation.
 pub fn extract_u64(buffer: &[u8], offset: usize) -> Result<u64, FileParseError> {
     buffer
-        .get(offset..offset + 8)
+        .get(
+            offset
+                ..offset
+                    .checked_add(8)
+                    .ok_or(FileParseError::BufferOverflow)?,
+        )
         .ok_or(FileParseError::BufferOverflow)
         .and_then(|bytes| bytes.try_into().map_err(|_| FileParseError::BufferOverflow))
         .map(u64::from_le_bytes)
@@ -20,7 +25,12 @@ pub fn extract_u64(buffer: &[u8], offset: usize) -> Result<u64, FileParseError> 
 /// Reads a little-endian `u32` at `offset`, returning [`FileParseError::BufferOverflow`] on truncation.
 pub fn extract_u32(buffer: &[u8], offset: usize) -> Result<u32, FileParseError> {
     buffer
-        .get(offset..offset + 4)
+        .get(
+            offset
+                ..offset
+                    .checked_add(4)
+                    .ok_or(FileParseError::BufferOverflow)?,
+        )
         .ok_or(FileParseError::BufferOverflow)
         .and_then(|bytes| {
             bytes
@@ -33,7 +43,12 @@ pub fn extract_u32(buffer: &[u8], offset: usize) -> Result<u32, FileParseError> 
 /// Reads a little-endian `u16` at `offset`, returning [`FileParseError::BufferOverflow`] on truncation.
 pub fn extract_u16(buffer: &[u8], offset: usize) -> Result<u16, FileParseError> {
     buffer
-        .get(offset..offset + 2)
+        .get(
+            offset
+                ..offset
+                    .checked_add(2)
+                    .ok_or(FileParseError::BufferOverflow)?,
+        )
         .ok_or(FileParseError::BufferOverflow)
         .and_then(|bytes| bytes.try_into().map_err(|_| FileParseError::BufferOverflow))
         .map(u16::from_le_bytes)
