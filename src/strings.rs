@@ -4,6 +4,11 @@
 //! Mach-O symtab / dylib cstring pools share the same on-disk encoding. This module centralizes
 //! reading and exposes thin per-format wrappers.
 
+use alloc::borrow::ToOwned;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::macho::MachO;
 use crate::pe::import::{ImportDirectory, ImportEntry};

@@ -3,6 +3,9 @@
 //! The bound import data directory points at an array of descriptors. Module
 //! name offsets are relative to the start of the bound import table, not RVAs.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::Field;
 use crate::pe::section::PeSection;

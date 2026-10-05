@@ -1,5 +1,7 @@
 //! COFF line number tables (`IMAGE_LINENUMBER`).
 
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::Field;
 use crate::pe::section::PeSection;

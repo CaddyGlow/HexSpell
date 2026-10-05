@@ -1,5 +1,7 @@
 //! ELF section linkage helpers.
 
+use alloc::string::String;
+
 /// A section identified by role, index, `sh_link`, and `sh_addr`.
 pub struct LinkedSection {
     /// Conventional role such as `.plt`, `.got`, or `.got.plt`.

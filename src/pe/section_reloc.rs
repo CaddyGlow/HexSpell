@@ -1,5 +1,7 @@
 //! COFF section relocation entries (`IMAGE_RELOCATION`).
 
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::Field;
 use crate::pe::section::PeSection;

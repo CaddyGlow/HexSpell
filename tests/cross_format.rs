@@ -1,3 +1,5 @@
+#![cfg(feature = "std")]
+
 //! Cross-format helpers, round-trip regression, FAT selection, and endianness tests.
 
 use hexspell::elf;

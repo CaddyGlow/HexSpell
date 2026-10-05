@@ -140,7 +140,7 @@ impl PE {
         self.coff_header.number_of_sections.value = new_count;
         self.optional_header.size_of_image.value = size_of_image;
 
-        let buffer = std::mem::take(&mut self.buffer);
+        let buffer = core::mem::take(&mut self.buffer);
         *self = PE::from_buffer(buffer)?;
         let checksum = self.calc_checksum();
         self.optional_header
@@ -162,7 +162,7 @@ impl PE {
         let extra = extra_bytes as usize;
 
         self.buffer
-            .splice(insert_at..insert_at, std::iter::repeat_n(0u8, extra));
+            .splice(insert_at..insert_at, core::iter::repeat_n(0u8, extra));
 
         for section in self.sections.iter_mut() {
             shift_section_fields(section, extra as i32);
@@ -202,7 +202,7 @@ impl PE {
         )?;
         self.optional_header.size_of_headers.value = new_size_of_headers;
 
-        let buffer = std::mem::take(&mut self.buffer);
+        let buffer = core::mem::take(&mut self.buffer);
         *self = PE::from_buffer(buffer)?;
         let checksum = self.calc_checksum();
         self.optional_header

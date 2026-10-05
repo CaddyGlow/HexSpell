@@ -4,6 +4,8 @@
 //! blocks. Each block owns a page RVA and a list of 16-bit entries whose high
 //! nibble is the relocation type and low 12 bits are the offset within the page.
 
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::Field;
 use crate::pe::header::PEType;

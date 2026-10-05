@@ -4,6 +4,8 @@
 //! members as [`Field`] values with their real file offsets. Parsing stops at the `DT_NULL`
 //! terminator. Common tags are available as `DT_*` constants and via [`DynamicEntry::tag_kind`].
 
+use alloc::vec::Vec;
+
 use super::header::ElfClass;
 use crate::errors::FileParseError;
 use crate::field::{ByteOrder, Field, NumericFieldMut};

@@ -1,5 +1,7 @@
 //! Debug directory entries (`IMAGE_DEBUG_DIRECTORY`).
 
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::Field;
 use crate::utils::{extract_u16, extract_u32};

@@ -3,6 +3,9 @@
 //! A FAT binary begins with a `fat_header` followed by one `fat_arch` (or `fat_arch_64`) per
 //! embedded thin Mach-O. HexSpell unpacks a chosen slice into a standalone [`crate::macho::MachO`].
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::ByteOrder;
 

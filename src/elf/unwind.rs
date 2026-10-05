@@ -1,5 +1,7 @@
 //! ELF unwind and exception sections.
 
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::{ByteOrder, Field};
 

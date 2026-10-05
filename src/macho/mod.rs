@@ -4,6 +4,11 @@
 //! Byte order is derived from the magic bytes at file offset 0 — there is no endianness field in
 //! the header.
 
+use alloc::string::String;
+#[cfg(feature = "std")]
+use alloc::vec;
+use alloc::vec::Vec;
+
 pub mod bitcode;
 pub mod dyld;
 pub mod fat;
@@ -47,6 +52,7 @@ impl MachO {
     }
 
     /// Writes [`MachO::buffer`] to `output_path`.
+    #[cfg(feature = "std")]
     pub fn write_file(&self, output_path: &str) -> std::io::Result<()> {
         let mut file = std::fs::File::create(output_path)?;
         use std::io::Write;
@@ -55,6 +61,7 @@ impl MachO {
     }
 
     /// Reads and parses a Mach-O file from disk (FAT binaries are unpacked).
+    #[cfg(feature = "std")]
     pub fn from_file(path: &str) -> Result<Self, errors::FileParseError> {
         let mut file = std::fs::File::open(path)?;
         let mut buffer = Vec::new();
@@ -66,6 +73,7 @@ impl MachO {
     /// Lists the architecture slices of a FAT binary at `path`.
     ///
     /// Returns an empty vector for thin (non-FAT) Mach-O files.
+    #[cfg(feature = "std")]
     pub fn fat_architectures(path: &str) -> Result<Vec<fat::FatArch>, errors::FileParseError> {
         let mut file = std::fs::File::open(path)?;
         let mut buffer = Vec::new();
@@ -77,6 +85,7 @@ impl MachO {
     }
 
     /// Parses the FAT slice at `index`, or the whole file when it is a thin Mach-O and `index` is 0.
+    #[cfg(feature = "std")]
     pub fn from_fat_index(path: &str, index: usize) -> Result<Self, errors::FileParseError> {
         let mut file = std::fs::File::open(path)?;
         let mut buffer = Vec::new();
@@ -85,7 +94,7 @@ impl MachO {
         Self::from_fat_index_buffer(buffer, index)
     }
 
-    /// Parses the FAT slice at `index` from an owned buffer (see [`MachO::from_fat_index`]).
+    /// Parses the FAT slice at `index` from an owned buffer (see `MachO::from_fat_index`).
     ///
     /// Only the selected architecture slice is copied into the returned [`MachO`]; other FAT slices
     /// are not included in the owned buffer.
@@ -108,6 +117,7 @@ impl MachO {
     }
 
     /// Reads only the thin Mach-O slice at `index` from a FAT file on disk (no full-file copy).
+    #[cfg(feature = "std")]
     pub fn from_fat_index_read(path: &str, index: usize) -> Result<Self, errors::FileParseError> {
         use std::io::{Read, Seek, SeekFrom};
         let mut file = std::fs::File::open(path)?;
@@ -390,7 +400,7 @@ impl MachO {
         let insert_at = lc_off + seg_hdr_size + (nsects as usize) * record_size;
 
         self.buffer
-            .splice(insert_at..insert_at, std::iter::repeat_n(0u8, record_size));
+            .splice(insert_at..insert_at, core::iter::repeat_n(0u8, record_size));
         let delta = record_size as i64;
 
         let order = self.byte_order();
@@ -564,7 +574,7 @@ impl MachO {
             let pad = 16 - misalign;
             let lc_end = self.header_size() + self.header.sizeofcmds.value as usize;
             self.buffer
-                .splice(lc_end..lc_end, std::iter::repeat_n(0u8, pad));
+                .splice(lc_end..lc_end, core::iter::repeat_n(0u8, pad));
             self.bump_fileoffs_from(lc_end, pad as i64)?;
             let new_off = dataoff + pad;
             order.write_u32(&mut self.buffer, cmd_off + 8, new_off as u32);
@@ -604,7 +614,7 @@ impl MachO {
     }
 
     fn reparse(&mut self) -> Result<(), errors::FileParseError> {
-        let buf = std::mem::take(&mut self.buffer);
+        let buf = core::mem::take(&mut self.buffer);
         *self = Self::from_buffer(buf)?;
         Ok(())
     }
@@ -629,7 +639,7 @@ impl MachO {
 
         if lc_end + cmd_size > min_off {
             self.buffer
-                .splice(lc_end..lc_end, std::iter::repeat_n(0u8, cmd_size));
+                .splice(lc_end..lc_end, core::iter::repeat_n(0u8, cmd_size));
             self.bump_fileoffs_from(lc_end, cmd_size as i64)?;
         }
 

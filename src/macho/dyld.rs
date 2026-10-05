@@ -3,6 +3,9 @@
 //! These routines walk the compressed opcode streams described in Apple's dyld sources. They expose
 //! decoded records for inspection; they do not apply relocations or resolve symbols at runtime.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 
 /// `BIND_OPCODE_*` immediate values for [`BindOpcode::SetDylibOrdinalImm`].

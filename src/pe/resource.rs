@@ -1,5 +1,8 @@
 //! Resource directory tree (`IMAGE_RESOURCE_DIRECTORY` / `ENTRY` / `DATA`).
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::Field;
 use crate::utils::{extract_u16, extract_u32};

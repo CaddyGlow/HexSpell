@@ -8,6 +8,9 @@
 //! For the `field()` / `field_mut()` convention on ELF and Mach-O layout enums,
 //! see `docs/layout.md` in the repository.
 
+use alloc::string::String;
+use alloc::string::ToString;
+
 use core::fmt;
 
 use crate::errors::FileParseError;
@@ -143,7 +146,7 @@ impl<const N: usize> FixedBytes<N> {
     /// Returns the NUL-terminated UTF-8 prefix (invalid bytes yield an empty string).
     pub fn as_str(&self) -> &str {
         let end = self.0.iter().position(|&b| b == 0).unwrap_or(N);
-        std::str::from_utf8(&self.0[..end]).unwrap_or("")
+        core::str::from_utf8(&self.0[..end]).unwrap_or("")
     }
 }
 
@@ -312,7 +315,7 @@ impl Field<u64> {
         new_value: u64,
         order: ByteOrder,
     ) -> Result<(), FileParseError> {
-        if self.size < std::mem::size_of::<u64>() {
+        if self.size < core::mem::size_of::<u64>() {
             let bits = (self.size * 8) as u32;
             if (new_value >> bits) != 0 {
                 return Err(FileParseError::ValueTooLarge);
@@ -342,7 +345,7 @@ impl Field<u32> {
         new_value: u32,
         order: ByteOrder,
     ) -> Result<(), FileParseError> {
-        if self.size < std::mem::size_of::<u32>() {
+        if self.size < core::mem::size_of::<u32>() {
             let bits = (self.size * 8) as u32;
             if (new_value >> bits) != 0 {
                 return Err(FileParseError::ValueTooLarge);
@@ -404,7 +407,7 @@ impl Field<u16> {
         new_value: u16,
         order: ByteOrder,
     ) -> Result<(), FileParseError> {
-        if self.size < std::mem::size_of::<u16>() {
+        if self.size < core::mem::size_of::<u16>() {
             let bits = (self.size * 8) as u32;
             if (new_value >> bits) != 0 {
                 return Err(FileParseError::ValueTooLarge);
@@ -442,6 +445,7 @@ impl Field<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn numeric_field_mut_u32_writes_four_bytes() {

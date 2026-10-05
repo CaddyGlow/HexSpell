@@ -3,6 +3,9 @@
 //! Parsing is read-only: descriptors and thunk slots are exposed as [`Field`] values
 //! with real file offsets so callers can patch the underlying buffer later.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::Field;
 use crate::pe::header::PEType;
@@ -366,7 +369,7 @@ pub fn import_names_for_dll<'a>(imports: &'a ImportDirectory, dll_name: &str) ->
         .unwrap_or_default()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
     use crate::pe::header::IMPORT;

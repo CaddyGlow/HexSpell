@@ -1,5 +1,7 @@
 //! Rich header (linker tool metadata between the DOS stub and PE signature).
 
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::utils::extract_u32;
 

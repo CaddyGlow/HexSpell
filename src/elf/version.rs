@@ -1,5 +1,7 @@
 //! GNU ELF symbol version sections.
 
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::{ByteOrder, Field};
 

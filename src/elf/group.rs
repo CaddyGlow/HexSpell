@@ -1,5 +1,7 @@
 //! ELF section groups and COMDAT metadata.
 
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::{ByteOrder, Field};
 

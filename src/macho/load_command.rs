@@ -4,6 +4,9 @@
 //! HexSpell models are additionally exposed as typed views through [`LoadCommand::typed`] and the
 //! per-kind parsers in this module.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::errors;
 use crate::field::{ByteOrder, Field};
 

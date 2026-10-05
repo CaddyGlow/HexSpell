@@ -3,6 +3,9 @@
 //! Read fields with `addr()`, `offset()`, etc.; the on-disk width of address/size fields depends
 //! on the parent segment kind (4 bytes for `section`, 8 for `section_64`).
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use super::load_command::{LoadCommand, LC_SEGMENT, LC_SEGMENT_64};
 use super::relocation::RelocationEntry;
 use crate::errors::FileParseError;

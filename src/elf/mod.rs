@@ -1,14 +1,18 @@
 //! Utilities for parsing and rewriting ELF binaries.
 //!
-//! Load a file with [`ELF::from_file`], patch fields through [`crate::field::Field`] or the
+//! Load a file with `ELF::from_file`, patch fields through [`crate::field::Field`] or the
 //! `p_*()` / `p_*_mut()` accessors on [`ProgramHeaderEntry`], then persist with
-//! [`ELF::write_file`]. Endianness is defined by [`ElfHeader::ei_data`]; use
+//! `ELF::write_file`. Endianness is defined by [`ElfHeader::ei_data`]; use
 //! [`ELF::byte_order`] as a convenience.
 //!
 //! Beyond the header tables, linked structures are parsed on demand: section names via
 //! [`ELF::section_name`], symbol tables via [`ELF::symbols`] / [`ELF::dynamic_symbols`], the
 //! dynamic array via [`ELF::dynamic`], and relocations via [`ELF::relocations`]. Parsing is
 //! read-only; every field is exposed as a [`crate::field::Field`] with its real file offset.
+
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 
 pub mod archive;
 pub mod dynamic;
@@ -672,6 +676,7 @@ impl ELF {
     }
 
     /// Writes [`ELF::buffer`] to `output_path`.
+    #[cfg(feature = "std")]
     pub fn write_file(&self, output_path: &str) -> std::io::Result<()> {
         let mut file = std::fs::File::create(output_path)?;
         use std::io::Write;
@@ -680,6 +685,7 @@ impl ELF {
     }
 
     /// Reads and parses an ELF file from disk.
+    #[cfg(feature = "std")]
     pub fn from_file(path: &str) -> Result<Self, errors::FileParseError> {
         let mut file = std::fs::File::open(path)?;
         let mut buffer = Vec::new();
@@ -721,7 +727,7 @@ impl ELF {
     }
 
     fn reparse(&mut self) -> Result<(), errors::FileParseError> {
-        let buf = std::mem::take(&mut self.buffer);
+        let buf = core::mem::take(&mut self.buffer);
         *self = Self::from_buffer(buf)?;
         Ok(())
     }
@@ -834,7 +840,7 @@ impl ELF {
 
         if table_end + ph_ent_size > min_off {
             self.buffer
-                .splice(table_end..table_end, std::iter::repeat_n(0u8, ph_ent_size));
+                .splice(table_end..table_end, core::iter::repeat_n(0u8, ph_ent_size));
             self.bump_offsets_from(table_end, ph_ent_size as i64)?;
         }
 
@@ -892,7 +898,7 @@ impl ELF {
         let min_off = self.min_file_offset() as usize;
         if table_end + ph_ent_size > min_off {
             self.buffer
-                .splice(table_end..table_end, std::iter::repeat_n(0u8, ph_ent_size));
+                .splice(table_end..table_end, core::iter::repeat_n(0u8, ph_ent_size));
             self.bump_offsets_from(table_end, ph_ent_size as i64)?;
         }
 
@@ -1077,7 +1083,7 @@ impl ELF {
         }
         self.buffer.splice(
             sh_table_end..sh_table_end,
-            std::iter::repeat_n(0u8, ent_size),
+            core::iter::repeat_n(0u8, ent_size),
         );
         self.bump_offsets_from(sh_table_end, ent_size as i64)?;
         Ok(sh_table_end)

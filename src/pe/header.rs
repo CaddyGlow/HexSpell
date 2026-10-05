@@ -277,7 +277,7 @@ impl OptionalHeader {
         }
 
         let mut data_directories: [DataDirectoryEntry; 16] =
-            std::array::from_fn(|i| DataDirectoryEntry {
+            core::array::from_fn(|i| DataDirectoryEntry {
                 virtual_address: Field::new(0, data_dirs_off + i * 8, 4),
                 size: Field::new(0, data_dirs_off + i * 8 + 4, 4),
             });

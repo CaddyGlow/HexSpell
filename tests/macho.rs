@@ -1,3 +1,5 @@
+#![cfg(feature = "std")]
+
 /// HexSpell Mach-O
 /// ====================================
 /// File to perform test on Mach-O parse

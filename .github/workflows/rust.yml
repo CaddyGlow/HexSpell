@@ -43,3 +43,18 @@ jobs:
 
     - name: Test
       run: cargo test --verbose
+
+  no-std:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+        targets: thumbv7em-none-eabi
+    - name: Check bare-metal target
+      run: cargo check --no-default-features --target thumbv7em-none-eabi
+    - name: Clippy without std
+      run: cargo clippy --no-default-features --all-targets -- -D warnings
+    - name: Test in-memory APIs without std
+      run: cargo test --no-default-features

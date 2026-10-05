@@ -5,6 +5,9 @@
 //! Parsing is read-only: every field is a [`Field`] with its real file offset so callers can patch
 //! the underlying buffer later.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use super::header::ElfClass;
 use crate::errors::FileParseError;
 use crate::field::{ByteOrder, Field, FieldMut, NumericFieldMut};

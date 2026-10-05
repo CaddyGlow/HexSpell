@@ -3,6 +3,8 @@
 //! [`ProgramHeaderEntry`] wraps ELF32 and ELF64 layouts. Read with `p_*()` methods; patch with
 //! the matching `p_*_mut()` accessor and [`crate::field::NumericFieldMut::update_with`].
 
+use alloc::vec::Vec;
+
 use super::header::ElfClass;
 use crate::errors;
 use crate::field::{ByteOrder, Field, FieldMut, NumericFieldMut};

@@ -3,6 +3,9 @@
 //! [`SegmentEntry`] wraps 32-bit and 64-bit segment commands. Read with `vmaddr()`, `fileoff()`,
 //! etc.; patch with the matching `*_mut()` accessor.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use super::load_command::LoadCommand;
 use crate::errors;
 use crate::field::{ByteOrder, Field, FieldMut, FixedBytes, NumericFieldMut};

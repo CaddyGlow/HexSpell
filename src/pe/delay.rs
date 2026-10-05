@@ -3,6 +3,9 @@
 //! Each descriptor references the delay-loaded DLL name, IAT, INT, and optional
 //! bound/unload IAT tables by RVA.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::Field;
 use crate::pe::header::PEType;

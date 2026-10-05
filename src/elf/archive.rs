@@ -1,5 +1,9 @@
 //! Minimal Unix `ar` archive reader for ELF object archives.
 
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::Field;
 

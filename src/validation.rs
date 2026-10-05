@@ -1,6 +1,11 @@
 //! Cross-format validation: file-range overlap detection, VA/file-offset translation, and
 //! lightweight consistency checks.
 
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+
 use crate::elf::ELF;
 use crate::errors::FileParseError;
 use crate::macho::MachO;

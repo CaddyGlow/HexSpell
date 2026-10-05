@@ -3,6 +3,9 @@
 //! [`SectionHeaderEntry`] wraps ELF32 and ELF64 layouts. Read with `sh_*()` methods; patch with
 //! the matching `sh_*_mut()` accessor.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use super::header::ElfClass;
 use crate::errors;
 use crate::field::{ByteOrder, Field, FieldMut, NumericFieldMut};

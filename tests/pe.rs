@@ -1,3 +1,5 @@
+#![cfg(feature = "std")]
+
 /// HexSpell PE
 /// ====================================
 /// File for testing PE functionalities

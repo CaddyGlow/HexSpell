@@ -12,21 +12,40 @@
 //! Additional prose documentation is in [`docs/guide.md`](https://github.com/M3str3/HexSpell/blob/main/docs/guide.md)
 //! and [`docs/layout.md`](https://github.com/M3str3/HexSpell/blob/main/docs/layout.md).
 //!
+//! # Feature modes
+//!
+//! The default `std` feature enables file I/O. With `default-features = false`, the crate
+//! uses `no_std` plus `alloc`: in-memory parsing, editing and validation remain available.
+//! Owned buffers and parsed tables require an allocator. Borrowed PE header inspection
+//! through [`pe::view::PeHeaders`] does not allocate.
+//!
+//! ```
+//! use hexspell::pe::view::PeHeaders;
+//! let bytes = include_bytes!("../tests/samples/sample1.exe");
+//! let headers = PeHeaders::parse(bytes).unwrap();
+//! assert!(headers.coff.number_of_sections.value > 0);
+//! ```
+//!
 //! # Examples
 //!
 //! Read a PE image and inspect the entry point:
 //!
 //! ```
+//! # #[cfg(feature = "std")]
+//! # {
 //! use hexspell::pe::PE;
 //!
 //! let pe = PE::from_file("tests/samples/sample1.exe").unwrap();
 //! println!("arch: {}", pe.architecture());
 //! println!("entry: {:#x}", pe.optional_header.entry_point.value);
+//! # }
 //! ```
 //!
 //! Patch a header field in place (`Field` carries the real file offset):
 //!
 //! ```
+//! # #[cfg(feature = "std")]
+//! # {
 //! use hexspell::pe::PE;
 //!
 //! let mut pe = PE::from_file("tests/samples/sample1.exe").unwrap();
@@ -36,11 +55,14 @@
 //!     .entry_point
 //!     .update(&mut pe.buffer, entry_rva)
 //!     .unwrap();
+//! # }
 //! ```
 //!
 //! Lazy parsers expose imports, exports, and other data directories on demand:
 //!
 //! ```
+//! # #[cfg(feature = "std")]
+//! # {
 //! use hexspell::pe::PE;
 //!
 //! let pe = PE::from_file("tests/samples/sample1.exe").unwrap();
@@ -49,11 +71,14 @@
 //!     .dlls
 //!     .iter()
 //!     .any(|dll| dll.dll_name.eq_ignore_ascii_case("KERNEL32.dll")));
+//! # }
 //! ```
 //!
 //! ELF endianness comes from `ei_data`; use [`elf::ELF::byte_order`] when patching:
 //!
 //! ```
+//! # #[cfg(feature = "std")]
+//! # {
 //! use hexspell::elf::ELF;
 //!
 //! let elf = ELF::from_file("tests/samples/linux").unwrap();
@@ -61,27 +86,38 @@
 //! let text = elf.section_index_by_name(".text").unwrap();
 //! assert_eq!(elf.section_name(text).unwrap(), ".text");
 //! assert_eq!(order, hexspell::field::ByteOrder::Little);
+//! # }
 //! ```
 //!
 //! Mach-O segments and linked dylibs:
 //!
 //! ```
+//! # #[cfg(feature = "std")]
+//! # {
 //! use hexspell::macho::MachO;
 //!
 //! let macho = MachO::from_file("tests/samples/machO-OSX-x86-ls").unwrap();
 //! assert!(!macho.segments.is_empty());
 //! let dylibs = macho.linked_dylibs().unwrap();
 //! assert!(dylibs.iter().any(|path| path.contains("libSystem")));
+//! # }
 //! ```
 //!
 //! Write the patched buffer back to disk:
 //!
 //! ```no_run
+//! # #[cfg(feature = "std")]
+//! # {
 //! use hexspell::pe::PE;
 //!
 //! let pe = PE::from_file("tests/samples/sample1.exe").unwrap();
 //! pe.write_file("out.exe").unwrap();
+//! # }
 //! ```
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
 
 // Standard
 pub mod errors;

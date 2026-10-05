@@ -14,5 +14,9 @@ exclude = ["tests/*"]
 keywords = ["binary", "executable", "parser", "PE", "ELF" ]
 categories = ["development-tools", "parsing"]
 
+[features]
+default = ["std"]
+std = []
+
 [dev-dependencies]
 toml = "1.0" # For testing purpose

@@ -7,6 +7,9 @@
 //! implementation favors correctness over exhaustiveness and can be
 //! extended as additional flags or metadata become relevant.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::errors;
 use crate::field::{Field, FixedBytes};
 use crate::utils::{extract_u16, extract_u32};
@@ -127,6 +130,8 @@ impl PeSection {
     ///
     /// # Example
     /// ```
+    /// # #[cfg(feature = "std")]
+    /// # {
     /// use hexspell::pe::PE;
     /// let pe = PE::from_file("tests/samples/sample1.exe").unwrap();
     ///
@@ -135,6 +140,7 @@ impl PeSection {
     /// for s in strings {
     ///     println!("{}", s);
     /// }
+    /// # }
     /// ```
     pub fn extract_strings(
         &self,

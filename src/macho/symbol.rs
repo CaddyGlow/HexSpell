@@ -3,6 +3,9 @@
 //! The table is located through [`LC_SYMTAB`](super::load_command::LC_SYMTAB): `symoff`/`nsyms`
 //! locate the `nlist` array and `stroff`/`strsize` the string pool that `n_strx` indexes into.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use super::load_command::SymtabCommand;
 use crate::errors::FileParseError;
 use crate::field::{ByteOrder, Field};

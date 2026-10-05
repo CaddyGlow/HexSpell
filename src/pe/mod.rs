@@ -7,11 +7,15 @@
 //!
 //! In addition to read/modify support, this module offers convenience
 //! helpers like [`PE::calc_checksum`](crate::pe::PE::calc_checksum) for computing the file checksum and
-//! [`PE::write_file`](crate::pe::PE::write_file) for persisting changes. The implementation is not a
+//! `PE::write_file` for persisting changes. The implementation is not a
 //! complete re-creation of the PE spec but aims to cover the portions
 //! commonly needed when experimenting with binaries.
 
+use alloc::vec::Vec;
+
+#[cfg(feature = "std")]
 use std::fs;
+#[cfg(feature = "std")]
 use std::io::{self, Write};
 
 use crate::errors::FileParseError;
@@ -415,6 +419,7 @@ impl PE {
     }
 
     /// Writes [`PE::buffer`] to `output_path`.
+    #[cfg(feature = "std")]
     pub fn write_file(&self, output_path: &str) -> io::Result<()> {
         let mut file: fs::File = fs::File::create(output_path)?;
         file.write_all(&self.buffer)?;
@@ -425,10 +430,13 @@ impl PE {
     ///
     /// # Examples
     /// ```
+    /// # #[cfg(feature = "std")]
+    /// # {
     /// use hexspell::pe::PE;
     /// let pe = PE::from_file("tests/samples/sample1.exe").unwrap(); // Sample checksum has to be the correct
     /// let calculed_check:u32 = pe.calc_checksum();
     /// assert_eq!(pe.optional_header.checksum.value, calculed_check);
+    /// # }
     /// ```
     pub fn calc_checksum(&self) -> u32 {
         let mut checksum: u64 = 0;
@@ -460,6 +468,7 @@ impl PE {
     }
 
     /// Reads and parses a PE file from disk.
+    #[cfg(feature = "std")]
     pub fn from_file(path: &str) -> Result<PE, FileParseError> {
         let data: Vec<u8> = fs::read(path).map_err(|e: std::io::Error| FileParseError::Io(e))?;
         PE::from_buffer(data)
@@ -621,7 +630,7 @@ impl PE {
                     let header_splice_at = alig_old_size_of_headers as usize;
                     self.buffer.splice(
                         header_splice_at..header_splice_at,
-                        std::iter::repeat_n(0, diff),
+                        core::iter::repeat_n(0, diff),
                     );
 
                     for section in self.sections.iter_mut() {

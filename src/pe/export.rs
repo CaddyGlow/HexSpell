@@ -4,7 +4,11 @@
 //! ([`NamedExport::name_rva`], [`NamedExport::name_ordinal_index`], and export
 //! address table fields) are [`Field`]s at their real buffer offsets.
 
-use std::collections::HashSet;
+use alloc::borrow::ToOwned;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use alloc::collections::BTreeSet;
 
 use crate::errors::FileParseError;
 use crate::field::Field;
@@ -255,7 +259,7 @@ impl Exports {
 
     /// Returns function table indices that have no corresponding name entry.
     pub fn ordinal_only_exports(&self) -> Vec<&FunctionExport> {
-        let named_indices: HashSet<usize> = self
+        let named_indices: BTreeSet<usize> = self
             .named
             .iter()
             .map(|entry| entry.name_ordinal_index.value as usize)
@@ -278,7 +282,7 @@ fn read_c_string(buffer: &[u8], offset: usize) -> Result<String, FileParseError>
         .iter()
         .position(|&b| b == 0)
         .ok_or(FileParseError::InvalidFileFormat)?;
-    std::str::from_utf8(&tail[..end])
+    core::str::from_utf8(&tail[..end])
         .map(|s| s.to_owned())
         .map_err(|_| FileParseError::InvalidFileFormat)
 }

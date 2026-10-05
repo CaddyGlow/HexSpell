@@ -1,5 +1,7 @@
 //! ELF symbol hash tables (`.hash` and `.gnu.hash`).
 
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::{ByteOrder, Field};
 

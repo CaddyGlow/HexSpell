@@ -143,3 +143,34 @@ dependencies).
 ## License
 
 Distributed under the terms of the MIT License. See [LICENSE](LICENSE) for details.
+
+## `no_std` support
+
+The `std` feature is enabled by default and preserves the file I/O APIs.
+Disable default features for `no_std + alloc`:
+
+```toml
+[dependencies]
+hexspell = { git = "https://github.com/CaddyGlow/HexSpell", default-features = false }
+```
+
+In this mode, PE, ELF and Mach-O parsing from buffers, field edits, layout
+operations and validation remain available. `from_file`, `write_file`, file-based
+Mach-O FAT helpers, and `FileParseError::Io` require `std`. Errors implement
+`core::error::Error` in both modes.
+
+Owned buffers, strings and parsed tables require an allocator supplied by the
+application. The borrowed `pe::view::PeHeaders` API does not allocate; this is not
+an allocator-free configuration of the entire crate.
+
+```rust
+use hexspell::pe::view::PeHeaders;
+
+fn machine(bytes: &[u8]) -> Result<u16, hexspell::errors::FileParseError> {
+    Ok(PeHeaders::parse(bytes)?.coff.machine.value)
+}
+```
+
+Validate both modes with `cargo test` and `cargo test --no-default-features`.
+`cargo check --no-default-features --target thumbv7em-none-eabi` checks a target
+without a standard library.

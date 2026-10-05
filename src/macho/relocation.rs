@@ -4,6 +4,8 @@
 //! either 8 bytes (`relocation_info`) or 8 bytes (`scattered_relocation_info` when the high bit of
 //! the first word is set).
 
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::{ByteOrder, Field};
 

@@ -11,6 +11,8 @@
 //! | ELF | `.rel` / `.rela` sections | `r_offset` (VA) | arch-specific `R_*` in `r_info` |
 //! | Mach-O | `section.reloff` | section-relative offset | `relocation_info` (not decoded yet) |
 
+use alloc::vec::Vec;
+
 use crate::elf::relocation::RelocationEntry;
 use crate::elf::ELF;
 use crate::errors::FileParseError;

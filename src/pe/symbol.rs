@@ -1,5 +1,8 @@
 //! COFF symbol table (`IMAGE_SYMBOL`) and string table.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::{Field, FixedBytes};
 use crate::utils::{extract_u16, extract_u32};

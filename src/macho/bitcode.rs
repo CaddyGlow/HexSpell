@@ -3,6 +3,8 @@
 //! LLVM bitcode is stored in a `__LLVM` segment (often with a `__bundle` section). HexSpell exposes
 //! the segment and its sections as parsed layout entries — it does not decode the bitcode IR.
 
+use alloc::vec::Vec;
+
 use super::section::SectionEntry;
 use super::segment::SegmentEntry;
 

@@ -4,6 +4,8 @@
 //! a [`Field`] with its real file offset. `r_info` packs the symbol index and relocation type;
 //! use [`RelocationEntry::symbol`] and [`RelocationEntry::reloc_type`] to unpack them.
 
+use alloc::vec::Vec;
+
 use super::header::ElfClass;
 use crate::errors::FileParseError;
 use crate::field::{ByteOrder, Field};

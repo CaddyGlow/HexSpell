@@ -1,3 +1,5 @@
+#![cfg(feature = "std")]
+
 /// HexSpell ELF
 /// ====================================
 /// File for testing ELF functionalities

@@ -99,6 +99,7 @@ impl<'a> PeHeaders<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::{vec, vec::Vec};
 
     fn image() -> Vec<u8> {
         let mut bytes = vec![0; 512];

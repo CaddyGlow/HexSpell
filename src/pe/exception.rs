@@ -1,5 +1,7 @@
 //! Exception directory (`RUNTIME_FUNCTION` entries on x64).
 
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::Field;
 use crate::utils::extract_u32;

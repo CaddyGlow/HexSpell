@@ -1,5 +1,7 @@
 //! Authenticode certificate table (`IMAGE_DIRECTORY_ENTRY_SECURITY`).
 
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::Field;
 use crate::utils::{extract_u16, extract_u32};

@@ -1,5 +1,8 @@
 //! ELF note parsing for `PT_NOTE` and `SHT_NOTE` payloads.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::field::{ByteOrder, Field};
 
