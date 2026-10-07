@@ -1,6 +1,6 @@
 [package]
-name = "hexspell"
-version = "1.0.0"
+name = "caddy-hexspell"
+version = "1.1.0"
 authors=["Mestre <namestre3@protonmail.com>"]
 edition = "2021"
 rust-version = "1.88"
@@ -13,6 +13,9 @@ readme = "README.md"
 exclude = ["tests/*"]
 keywords = ["binary", "executable", "parser", "PE", "ELF" ]
 categories = ["development-tools", "parsing"]
+
+[lib]
+name = "hexspell"
 
 [features]
 default = ["std"]
