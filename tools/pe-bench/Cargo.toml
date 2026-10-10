@@ -1,0 +1,13 @@
+[package]
+name = "hexspell-pe-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone tooling: these dependencies never enter HexSpell's published crate.
+[dependencies]
+hexspell = { package = "caddy-hexspell", path = "../.." }
+goblin = "=0.10.7"
+object = { version = "=0.40.0", default-features = false, features = ["read", "std", "pe"] }
+
+[workspace]

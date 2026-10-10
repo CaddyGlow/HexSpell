@@ -1,5 +1,7 @@
 //! Layout helpers for PE structural edits (section removal, header growth, sync).
 
+use alloc::vec::Vec;
+
 use crate::errors::FileParseError;
 use crate::pe::header;
 use crate::pe::section::PeSection;
@@ -36,6 +38,79 @@ fn write_u16(buffer: &mut [u8], offset: usize, value: u16) -> Result<(), FilePar
     Ok(())
 }
 
+/// File pointers must move with their targets, including pointers in raw debug
+/// records and COFF metadata rather than only section raw-data pointers.
+pub(super) struct FileOffsetFixups(Vec<(usize, u32)>);
+
+impl FileOffsetFixups {
+    pub(super) fn capture(pe: &PE) -> Result<Self, FileParseError> {
+        let mut fields = Vec::new();
+        fields.push((
+            pe.coff_header.pointer_to_symbol_table.offset,
+            pe.coff_header.pointer_to_symbol_table.value,
+        ));
+        for section in &pe.sections {
+            for field in [
+                &section.pointer_to_raw_data,
+                &section.pointer_to_relocations,
+                &section.pointer_to_linenumbers,
+            ] {
+                fields.push((field.offset, field.value));
+            }
+        }
+        if pe.optional_header.has_data_directory(header::SECURITY) {
+            let field = &pe.optional_header.data_directories[header::SECURITY].virtual_address;
+            fields.push((field.offset, field.value));
+        }
+        if let Some(debug) = pe.debug_directory()? {
+            for entry in debug.entries {
+                fields.push((
+                    entry.pointer_to_raw_data.offset,
+                    entry.pointer_to_raw_data.value,
+                ));
+            }
+        }
+        Ok(Self(fields))
+    }
+
+    pub(super) fn apply(
+        &self,
+        buffer: &mut [u8],
+        edits: &[(usize, usize, usize)],
+    ) -> Result<(), FileParseError> {
+        let translate = |mut position: usize| -> Result<Option<usize>, FileParseError> {
+            for &(start, removed, inserted) in edits {
+                let end = start
+                    .checked_add(removed)
+                    .ok_or(FileParseError::BufferOverflow)?;
+                if position >= end {
+                    position = position
+                        .checked_sub(removed)
+                        .and_then(|p| p.checked_add(inserted))
+                        .ok_or(FileParseError::BufferOverflow)?;
+                } else if position >= start {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(position))
+        };
+        for &(field_offset, value) in &self.0 {
+            if value == 0 {
+                continue;
+            }
+            if let Some(field_offset) = translate(field_offset)? {
+                let value = translate(value as usize)?.unwrap_or(0);
+                write_u32(
+                    buffer,
+                    field_offset,
+                    u32::try_from(value).map_err(|_| FileParseError::ValueTooLarge)?,
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl PE {
     /// Renames section `index` (truncated to 8 bytes on disk).
     pub fn rename_section(&mut self, index: usize, new_name: &str) -> Result<(), FileParseError> {
@@ -55,6 +130,7 @@ impl PE {
         if self.sections.len() == 1 {
             return Err(FileParseError::InvalidFileFormat);
         }
+        let fixups = FileOffsetFixups::capture(self)?;
 
         let removed = &self.sections[index];
         let header_off = removed.name.offset;
@@ -70,6 +146,7 @@ impl PE {
 
         if raw_len > 0 && raw_start + raw_len <= self.buffer.len() {
             self.buffer.drain(raw_start..raw_start + raw_len);
+            fixups.apply(&mut self.buffer, &[(raw_start, raw_len, 0)])?;
             for section in self.sections.iter_mut() {
                 if section.pointer_to_raw_data.value > raw_ptr {
                     let new_ptr = section.pointer_to_raw_data.value - raw_size;
@@ -83,7 +160,16 @@ impl PE {
             }
         }
 
-        self.buffer.drain(header_off..header_off + 40);
+        // Compact only the section table. Removing bytes from the whole file
+        // would shift every raw payload by 40 and break file alignment.
+        let table_end = self
+            .sections
+            .last()
+            .map(|section| section.name.offset + 40)
+            .ok_or(FileParseError::InvalidFileFormat)?;
+        self.buffer
+            .copy_within(header_off + 40..table_end, header_off);
+        self.buffer[table_end - 40..table_end].fill(0);
 
         for (i, section) in self.sections.iter_mut().enumerate() {
             if i == index {
@@ -155,19 +241,38 @@ impl PE {
         if extra_bytes == 0 {
             return Ok(());
         }
+        let fixups = FileOffsetFixups::capture(self)?;
+        let mut edits = Vec::new();
 
         let optional_start = self.optional_header.magic.offset;
         let old_optional_size = self.coff_header.size_of_optional_header.value as usize;
         let insert_at = optional_start + old_optional_size;
         let extra = extra_bytes as usize;
+        let file_align = self.optional_header.file_alignment.value;
+        let raw_shift = align_up(extra_bytes as u32, file_align);
+        let first_raw = self
+            .sections
+            .iter()
+            .filter(|section| section.size_of_raw_data.value > 0)
+            .map(|section| section.pointer_to_raw_data.value as usize)
+            .min();
 
         self.buffer
             .splice(insert_at..insert_at, core::iter::repeat_n(0u8, extra));
+        edits.push((insert_at, 0, extra));
+        if let Some(first_raw) = first_raw {
+            let padding = raw_shift as usize - extra;
+            self.buffer.splice(
+                first_raw + extra..first_raw + extra,
+                core::iter::repeat_n(0u8, padding),
+            );
+            edits.push((first_raw + extra, 0, padding));
+        }
 
         for section in self.sections.iter_mut() {
             shift_section_fields(section, extra as i32);
             if section.pointer_to_raw_data.value as usize >= insert_at {
-                let new_ptr = section.pointer_to_raw_data.value + extra as u32;
+                let new_ptr = section.pointer_to_raw_data.value + raw_shift;
                 write_u32(
                     &mut self.buffer,
                     section.pointer_to_raw_data.offset,
@@ -201,6 +306,8 @@ impl PE {
             new_size_of_headers,
         )?;
         self.optional_header.size_of_headers.value = new_size_of_headers;
+
+        fixups.apply(&mut self.buffer, &edits)?;
 
         let buffer = core::mem::take(&mut self.buffer);
         *self = PE::from_buffer(buffer)?;

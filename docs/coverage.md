@@ -18,10 +18,10 @@ method call; “Eager” structures are filled during `from_buffer`.
 | TLS / exceptions / debug / resources | Modeled | Lazy | |
 | COFF symbol table + strtab | Modeled | Lazy — `PE::coff_symbols` | Long section names via `strings::pe_section_name` |
 | Bound / delay-load imports | Modeled | Lazy | |
-| Load config (base fields) | Modeled | Lazy | PE32+ security cookie at byte 88; requires Size >= 96 and the full declared extent in the buffer. Larger versions are accepted; trailing fields are not modeled. |
+| Load config (base fields) | Modeled | Lazy | Cookie at byte 60 (PE32) / 88 (PE32+); Size >= 64 / 96, with the full declared extent present. Affinity is modeled in both layouts. Larger versions accepted; trailing fields generally unmodeled. |
 | Rich header / certs / CLR / ARM64x | Modeled | Lazy — `rich_header`, `certificates`, `clr`, `architecture_data` | Read-only certs |
 | Line numbers (COFF) | Modeled | Lazy — `section_linenumbers` | |
-| Section rename / remove / layout sync | Partial | `layout::rename_section`, `remove_section`, `sync_layout` | Not all edge cases |
+| Section rename / remove / layout sync | Partial | `layout::rename_section`, `remove_section`, `sync_layout` | Aligned raw data and overlay/file-pointer preservation tested against pefile. Embedded code/data RVAs and entry-point rebuilding after middle-section removal remain partial. |
 
 ## ELF (Linux / BSD)
 

@@ -124,59 +124,40 @@ impl HybridLoadConfigFields {
         pe_type: header::PEType,
     ) -> Result<Self, FileParseError> {
         let size = size as usize;
-        if buffer.len() < offset + size {
+        if offset
+            .checked_add(size)
+            .is_none_or(|end| end > buffer.len())
+        {
             return Err(FileParseError::BufferOverflow);
         }
-
-        let read_u64 = |off: usize| -> Result<u64, FileParseError> {
-            match pe_type {
-                header::PEType::PE32 => Ok(extract_u32(buffer, off)? as u64),
-                header::PEType::PE32Plus => extract_u64(buffer, off),
-            }
+        let mut fields = HybridLoadConfigFields {
+            hybrid_metadata_pointer: None,
+            chpe_code_address_range_offset: None,
+            chpe_code_address_range_count: None,
         };
-
-        match machine {
-            IMAGE_FILE_MACHINE_ARM64X => {
-                // ARM64X hybrid pointer is at offset 0xF8 in the PE32+ load config (Windows SDK).
-                const HYBRID_PTR_OFF: usize = 0xF8;
-                if size < HYBRID_PTR_OFF + 8 {
-                    return Err(FileParseError::UnsupportedFeature(
-                        "ARM64X hybrid metadata pointer (load config too small)".into(),
-                    ));
-                }
-                Ok(HybridLoadConfigFields {
-                    hybrid_metadata_pointer: Some(Field::new(
-                        read_u64(offset + HYBRID_PTR_OFF)?,
-                        offset + HYBRID_PTR_OFF,
-                        8,
-                    )),
-                    chpe_code_address_range_offset: None,
-                    chpe_code_address_range_count: None,
-                })
+        if matches!(
+            machine,
+            IMAGE_FILE_MACHINE_ARMNT | IMAGE_FILE_MACHINE_ARM64 | IMAGE_FILE_MACHINE_ARM64X
+        ) {
+            // CHPEMetadataPointer follows DynamicValueRelocTable in the SDK
+            // load-config layout; its offset and width depend on PE magic.
+            let (relative, width) = match pe_type {
+                header::PEType::PE32 => (124, 4),
+                header::PEType::PE32Plus => (200, 8),
+            };
+            if size < relative + width {
+                return Err(FileParseError::UnsupportedFeature(
+                    "CHPE metadata pointer (load config too small)".into(),
+                ));
             }
-            IMAGE_FILE_MACHINE_ARMNT | IMAGE_FILE_MACHINE_ARM64 => {
-                const CHPE_PTR_OFF: usize = 0xF8;
-                if size < CHPE_PTR_OFF + 8 {
-                    return Err(FileParseError::UnsupportedFeature(
-                        "CHPE metadata pointer (load config too small)".into(),
-                    ));
-                }
-                Ok(HybridLoadConfigFields {
-                    hybrid_metadata_pointer: Some(Field::new(
-                        read_u64(offset + CHPE_PTR_OFF)?,
-                        offset + CHPE_PTR_OFF,
-                        8,
-                    )),
-                    chpe_code_address_range_offset: None,
-                    chpe_code_address_range_count: None,
-                })
-            }
-            _ => Ok(HybridLoadConfigFields {
-                hybrid_metadata_pointer: None,
-                chpe_code_address_range_offset: None,
-                chpe_code_address_range_count: None,
-            }),
+            let pointer_offset = offset + relative;
+            let value = match pe_type {
+                header::PEType::PE32 => extract_u32(buffer, pointer_offset)? as u64,
+                header::PEType::PE32Plus => extract_u64(buffer, pointer_offset)?,
+            };
+            fields.hybrid_metadata_pointer = Some(Field::new(value, pointer_offset, width));
         }
+        Ok(fields)
     }
 }
 

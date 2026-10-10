@@ -22,6 +22,11 @@
 
 ## [Unreleased]
 
+- **PE**
+    - *Fixed*: Correct PE32 load configuration affinity, version, EditList, and security cookie offsets; correct CHPE pointer offsets, widths, and VA-to-RVA conversion.
+    - *Fixed*: Correct debug directory RVA/file-pointer field ordering and preserve the full file length in checksum calculations.
+    - *Fixed*: Preserve raw section alignment and payloads during section removal and optional-header growth; retain overlays during insertion and rebase COFF, certificate, section metadata, and debug file pointers during file shifts.
+
 
 ## [1.1.2] - 2026-10-10
 

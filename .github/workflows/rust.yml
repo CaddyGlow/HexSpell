@@ -44,6 +44,22 @@ jobs:
     - name: Test
       run: cargo test --verbose
 
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install independent PE parser
+      run: python -m pip install pefile==2024.8.26
+    - name: Compare PE fields and structural edits with pefile
+      env:
+        HEXSPELL_PE_CORPUS: /tmp/hexspell-pe-corpus
+      run: |
+        python tools/pe-bench/build_corpus.py "$HEXSPELL_PE_CORPUS"
+        cargo test --test pefile -- --ignored
+    - name: Benchmark harness smoke test
+      run: |
+        cargo run --release --locked --manifest-path tools/pe-bench/Cargo.toml -- /tmp/hexspell-pe-corpus 1 1
+        python tools/pe-bench/pefile_bench.py /tmp/hexspell-pe-corpus --milliseconds 1 --rounds 1
+
   no-std:
     runs-on: ubuntu-latest
     steps:
