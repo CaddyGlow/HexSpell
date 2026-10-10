@@ -57,8 +57,7 @@ fn csv(value: &str) -> String {
 fn run(path: &Path, milliseconds: u64, rounds: usize) -> BenchResult<()> {
     // File I/O and Python startup are outside every timed loop.
     let buffer = std::fs::read(path)?;
-    // Derive metadata without requiring HexSpell's eager relocation parser to
-    // accept the input before the other parsers get a chance to run.
+    // Derive corpus metadata from the header-only view.
     let headers = PeHeaders::parse(&buffer)?;
     let optional = OptionalHeader::parse(&buffer, headers.optional)?;
     let kind = optional.pe_type()?;

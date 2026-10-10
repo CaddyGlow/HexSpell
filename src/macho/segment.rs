@@ -185,7 +185,26 @@ impl SegmentEntry {
         load_commands: &[LoadCommand],
         order: ByteOrder,
     ) -> Result<Vec<Self>, errors::FileParseError> {
-        let mut segments = Vec::new();
+        let mut count = 0;
+        for cmd in load_commands {
+            let minimum = match cmd.cmd.value {
+                0x1 => 56,
+                0x19 => 72,
+                _ => continue,
+            };
+            if cmd.cmdsize.value < minimum {
+                return Err(errors::FileParseError::InvalidFileFormat);
+            }
+            let start = cmd.cmd.offset;
+            let end = start
+                .checked_add(cmd.cmdsize.value as usize)
+                .ok_or(errors::FileParseError::BufferOverflow)?;
+            buffer
+                .get(start..end)
+                .ok_or(errors::FileParseError::BufferOverflow)?;
+            count += 1;
+        }
+        let mut segments = Vec::with_capacity(count);
 
         for cmd in load_commands {
             let offset = cmd.cmd.offset;

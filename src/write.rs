@@ -24,8 +24,8 @@ pub struct PeInsertSectionPlan {
 }
 
 /// Computes where a new PE section would be placed without mutating `pe`.
-pub fn plan_pe_insert_section(
-    pe: &PE,
+pub fn plan_pe_insert_section<B: core::ops::Deref<Target = [u8]>>(
+    pe: &PE<B>,
     new: &NewSection,
 ) -> Result<PeInsertSectionPlan, FileParseError> {
     let file_alignment = pe.optional_header.file_alignment.value;

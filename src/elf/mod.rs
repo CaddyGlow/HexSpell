@@ -10,6 +10,7 @@
 //! dynamic array via [`ELF::dynamic`], and relocations via [`ELF::relocations`]. Parsing is
 //! read-only; every field is exposed as a [`crate::field::Field`] with its real file offset.
 
+use alloc::borrow::Cow;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -27,6 +28,7 @@ pub mod section;
 pub mod symbol;
 pub mod unwind;
 pub mod version;
+pub mod view;
 
 use crate::errors;
 use crate::field::ByteOrder;
@@ -35,24 +37,10 @@ use header::{ElfClass, ElfHeader};
 use program::{NewPtLoad, ProgramHeaderEntry, PT_LOAD};
 use section::{NewSection, SectionHeaderEntry};
 
-/// Reads a NUL-terminated string starting at `offset` in a string table region.
-///
-/// Used to resolve `.shstrtab`, `.strtab` and `.dynstr` names. Invalid UTF-8 is decoded lossily.
-pub(crate) fn read_str_at(buffer: &[u8], offset: usize) -> Result<String, errors::FileParseError> {
-    let tail = buffer
-        .get(offset..)
-        .ok_or(errors::FileParseError::BufferOverflow)?;
-    let end = tail
-        .iter()
-        .position(|&b| b == 0)
-        .ok_or(errors::FileParseError::InvalidFileFormat)?;
-    Ok(String::from_utf8_lossy(&tail[..end]).into_owned())
-}
-
-/// A parsed ELF image backed by an owned byte buffer.
-pub struct ELF {
+/// A parsed ELF image backed by owned bytes (by default) or a borrowed slice.
+pub struct ELF<B = Vec<u8>> {
     /// Full file contents; pass slices of this to field update methods.
-    pub buffer: Vec<u8>,
+    pub buffer: B,
     /// ELF file header (`Ehdr`).
     pub header: ElfHeader,
     /// Program header table (`Phdr`).
@@ -61,7 +49,7 @@ pub struct ELF {
     pub section_headers: Vec<SectionHeaderEntry>,
 }
 
-impl ELF {
+impl<B: core::ops::Deref<Target = [u8]>> ELF<B> {
     /// Endianness from `header.ei_data` (`1` = little, `2` = big).
     pub fn byte_order(&self) -> Result<ByteOrder, errors::FileParseError> {
         ByteOrder::from_ei_data(self.header.ei_data.value)
@@ -69,6 +57,11 @@ impl ELF {
 
     /// Resolves the name of section `index` via the section header string table (`.shstrtab`).
     pub fn section_name(&self, index: usize) -> Result<String, errors::FileParseError> {
+        Ok(self.section_name_ref(index)?.into_owned())
+    }
+
+    /// Borrows the section name, allocating only for lossy UTF-8 decoding.
+    pub fn section_name_ref(&self, index: usize) -> Result<Cow<'_, str>, errors::FileParseError> {
         let sh = self
             .section_headers
             .get(index)
@@ -78,8 +71,18 @@ impl ELF {
             .section_headers
             .get(strndx)
             .ok_or(errors::FileParseError::InvalidFileFormat)?;
-        let name_offset = strtab.sh_offset() as usize + sh.sh_name() as usize;
-        read_str_at(&self.buffer, name_offset)
+        let start = usize::try_from(strtab.sh_offset())
+            .map_err(|_| errors::FileParseError::BufferOverflow)?;
+        let size = usize::try_from(strtab.sh_size())
+            .map_err(|_| errors::FileParseError::BufferOverflow)?;
+        let end = start
+            .checked_add(size)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        let bytes = self
+            .buffer
+            .get(start..end)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        crate::strings::read_c_string_ref(bytes, sh.sh_name() as usize)
     }
 
     /// Returns the raw on-disk bytes of section `index` (`sh_offset` .. `sh_offset + sh_size`).
@@ -105,7 +108,7 @@ impl ELF {
     /// Finds the index of the first section named `name`.
     pub fn section_index_by_name(&self, name: &str) -> Option<usize> {
         (0..self.section_headers.len())
-            .find(|&i| self.section_name(i).map(|n| n == name).unwrap_or(false))
+            .find(|&i| self.section_name_ref(i).map(|n| n == name).unwrap_or(false))
     }
 
     /// Finds the first section header named `name`.
@@ -372,12 +375,16 @@ impl ELF {
     pub fn is_core(&self) -> bool {
         matches!(self.header.elf_type.value, header::ElfType::Core)
     }
+}
 
+impl ELF {
     /// Parses a Unix `ar` archive buffer.
     pub fn parse_archive(buffer: &[u8]) -> Result<Archive, errors::FileParseError> {
         Archive::parse(buffer)
     }
+}
 
+impl<B: core::ops::Deref<Target = [u8]>> ELF<B> {
     fn named_blob(
         &self,
         name: &str,
@@ -531,7 +538,9 @@ impl ELF {
 
         Ok(result)
     }
+}
 
+impl ELF {
     /// Applies a RELA relocation as `symbol_value + r_addend` to the relocation target.
     ///
     /// `r_offset` is translated as a virtual address through `PT_LOAD`; if no segment matches, it
@@ -666,7 +675,9 @@ impl ELF {
         self.reparse()?;
         Ok(merged)
     }
+}
 
+impl<B: core::ops::Deref<Target = [u8]>> ELF<B> {
     /// Returns the `PT_GNU_RELRO` segments.
     pub fn gnu_relro_segments(&self) -> Vec<&ProgramHeaderEntry> {
         self.program_headers
@@ -683,7 +694,9 @@ impl ELF {
         file.write_all(&self.buffer)?;
         Ok(())
     }
+}
 
+impl ELF {
     /// Reads and parses an ELF file from disk.
     #[cfg(feature = "std")]
     pub fn from_file(path: &str) -> Result<Self, errors::FileParseError> {
@@ -696,34 +709,7 @@ impl ELF {
 
     /// Parses an ELF image from an owned byte buffer.
     pub fn from_buffer(buffer: Vec<u8>) -> Result<Self, errors::FileParseError> {
-        let header = ElfHeader::parse(&buffer)?;
-        let byte_order = header.ei_data.value;
-        let order = ByteOrder::from_ei_data(byte_order)?;
-        let class = header.class()?;
-        let program_headers = ProgramHeaderEntry::parse_program_headers(
-            &buffer,
-            header.ph_off.value,
-            header.ph_ent_size.value,
-            header.ph_num.value,
-            class,
-            order,
-        )?;
-        let section_count = Self::section_header_count(&buffer, &header, class, order)?;
-        let section_headers = SectionHeaderEntry::parse_section_headers(
-            &buffer,
-            header.sh_off.value,
-            header.sh_ent_size.value,
-            section_count,
-            class,
-            order,
-        )?;
-
-        Ok(ELF {
-            buffer,
-            header,
-            program_headers,
-            section_headers,
-        })
+        Self::parse_buffer(buffer)
     }
 
     fn reparse(&mut self) -> Result<(), errors::FileParseError> {
@@ -731,7 +717,9 @@ impl ELF {
         *self = Self::from_buffer(buf)?;
         Ok(())
     }
+}
 
+impl<B: core::ops::Deref<Target = [u8]>> ELF<B> {
     fn section_header_count(
         buffer: &[u8],
         header: &ElfHeader,
@@ -750,7 +738,9 @@ impl ELF {
             ElfClass::Elf64 => Ok(order.read_u64(buffer, base + 32)? as usize),
         }
     }
+}
 
+impl ELF {
     fn min_file_offset(&self) -> u64 {
         let mut min = u64::MAX;
         for ph in &self.program_headers {
@@ -1270,6 +1260,52 @@ impl ELF {
         }
 
         Ok(())
+    }
+    /// Parses borrowed bytes without copying the file buffer.
+    ///
+    /// Headers and tables are still allocated. Use `from_buffer` for editing.
+    ///
+    /// Borrowed buffers cannot be patched:
+    /// ```compile_fail
+    /// use hexspell::elf::ELF;
+    /// let mut image = ELF::from_slice(&[]).unwrap();
+    /// image.header.ei_data.update(&mut image.buffer, 0).unwrap();
+    /// ```
+    pub fn from_slice(buffer: &[u8]) -> Result<ELF<&[u8]>, errors::FileParseError> {
+        ELF::parse_buffer(buffer)
+    }
+}
+
+impl<B: core::ops::Deref<Target = [u8]>> ELF<B> {
+    fn parse_buffer(buffer: B) -> Result<Self, errors::FileParseError> {
+        let header = ElfHeader::parse(&buffer)?;
+        let byte_order = header.ei_data.value;
+        let order = ByteOrder::from_ei_data(byte_order)?;
+        let class = header.class()?;
+        let program_headers = ProgramHeaderEntry::parse_program_headers(
+            &buffer,
+            header.ph_off.value,
+            header.ph_ent_size.value,
+            header.ph_num.value,
+            class,
+            order,
+        )?;
+        let section_count = Self::section_header_count(&buffer, &header, class, order)?;
+        let section_headers = SectionHeaderEntry::parse_section_headers(
+            &buffer,
+            header.sh_off.value,
+            header.sh_ent_size.value,
+            section_count,
+            class,
+            order,
+        )?;
+
+        Ok(ELF {
+            buffer,
+            header,
+            program_headers,
+            section_headers,
+        })
     }
 }
 

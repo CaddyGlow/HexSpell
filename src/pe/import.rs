@@ -89,8 +89,6 @@ pub struct DllImport {
 pub struct ImportDirectory {
     /// Absolute file offset where the descriptor array starts.
     pub offset: usize,
-    /// Parsed descriptors (null terminator excluded).
-    pub descriptors: Vec<ImageImportDescriptor>,
     /// Resolved DLL imports.
     pub dlls: Vec<DllImport>,
 }
@@ -101,7 +99,15 @@ impl ImageImportDescriptor {
 
     /// Parses one descriptor at `offset`.
     pub fn parse(buffer: &[u8], offset: usize) -> Result<Self, FileParseError> {
-        if buffer.len() < offset + Self::SIZE {
+        if buffer
+            .get(
+                offset
+                    ..offset
+                        .checked_add(Self::SIZE)
+                        .ok_or(FileParseError::BufferOverflow)?,
+            )
+            .is_none()
+        {
             return Err(FileParseError::BufferOverflow);
         }
 
@@ -149,41 +155,37 @@ impl ImportDirectory {
         if import_rva == 0 {
             return Ok(ImportDirectory {
                 offset: 0,
-                descriptors: Vec::new(),
                 dlls: Vec::new(),
             });
         }
 
         let offset = rva_to_offset(buffer, sections, import_rva)?;
 
-        let mut descriptors = Vec::new();
+        let mut dlls = Vec::new();
         let mut cursor = offset;
         loop {
             let desc = ImageImportDescriptor::parse(buffer, cursor)?;
             if desc.is_null() {
                 break;
             }
-            descriptors.push(desc);
-            cursor += ImageImportDescriptor::SIZE;
+            dlls.push(parse_dll_import(buffer, sections, desc, pe_type)?);
+            cursor = cursor
+                .checked_add(ImageImportDescriptor::SIZE)
+                .ok_or(FileParseError::BufferOverflow)?;
         }
+        Ok(ImportDirectory { offset, dlls })
+    }
 
-        let dlls = descriptors
-            .iter()
-            .map(|desc| parse_dll_import(buffer, sections, desc, pe_type))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(ImportDirectory {
-            offset,
-            descriptors,
-            dlls,
-        })
+    /// Descriptors in file order, borrowed from their owning DLL records.
+    pub fn descriptors(&self) -> impl ExactSizeIterator<Item = &ImageImportDescriptor> {
+        self.dlls.iter().map(|dll| &dll.descriptor)
     }
 }
 
 fn parse_dll_import(
     buffer: &[u8],
     sections: &[PeSection],
-    desc: &ImageImportDescriptor,
+    desc: ImageImportDescriptor,
     pe_type: PEType,
 ) -> Result<DllImport, FileParseError> {
     let name_rva = desc.name.value;
@@ -199,13 +201,7 @@ fn parse_dll_import(
     let entries = parse_thunk_table(buffer, sections, thunk_rva, pe_type)?;
 
     Ok(DllImport {
-        descriptor: ImageImportDescriptor {
-            original_first_thunk: desc.original_first_thunk.clone(),
-            time_date_stamp: desc.time_date_stamp.clone(),
-            forwarder_chain: desc.forwarder_chain.clone(),
-            name: desc.name.clone(),
-            first_thunk: desc.first_thunk.clone(),
-        },
+        descriptor: desc,
         dll_name_offset,
         dll_name,
         entries,
@@ -391,10 +387,10 @@ mod tests {
 
         assert_eq!(import_rva, 0x9000);
         assert_eq!(imports.offset, 0x4c00);
-        assert_eq!(imports.descriptors.len(), 5);
+        assert_eq!(imports.descriptors().len(), 5);
         assert_eq!(imports.dlls.len(), 5);
 
-        let first = &imports.descriptors[0];
+        let first = &imports.dlls[0].descriptor;
         assert_eq!(first.original_first_thunk.value, 0x9078);
         assert_eq!(first.original_first_thunk.offset, 0x4c00);
         assert_eq!(first.time_date_stamp.value, 0);

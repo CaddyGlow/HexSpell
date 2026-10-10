@@ -1,6 +1,6 @@
 [package]
 name = "caddy-hexspell"
-version = "1.1.2"
+version = "1.2.0"
 authors=["Mestre <namestre3@protonmail.com>"]
 edition = "2021"
 rust-version = "1.88"
@@ -10,7 +10,7 @@ repository = "https://github.com/CaddyGlow/HexSpell"
 homepage = "https://github.com/CaddyGlow/HexSpell"
 documentation = "https://docs.rs/caddy-hexspell"
 readme = "README.md"
-exclude = ["tests/*", "tools/pe-bench/*"]
+exclude = ["tests/*", "tools/pe-bench/*", "benches/*"]
 keywords = ["binary", "executable", "parser", "PE", "ELF" ]
 categories = ["development-tools", "parsing"]
 
@@ -23,3 +23,8 @@ std = []
 
 [dev-dependencies]
 toml = "1.0" # For testing purpose
+
+[[bench]]
+name = "parsing"
+harness = false
+required-features = ["std"]

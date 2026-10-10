@@ -13,7 +13,7 @@ method call; “Eager” structures are filled during `from_buffer`.
 | Section table | Modeled | Eager | `PeSection`, `insert_section` |
 | Imports / IAT / hint-name | Modeled | Lazy — `PE::imports` | |
 | Exports | Modeled | Lazy — `PE::exports` | Forwarders, ordinals |
-| Base relocations | Modeled | Eager — `PE::base_relocations` | Also `reloc::pe_parse_base_relocations` |
+| Base relocations | Modeled | Lazy — `PE::base_relocations()` / `base_relocations_iter` | Current buffer; no cache |
 | Section COFF relocs | Modeled | Lazy — `PE::section_relocations` | |
 | TLS / exceptions / debug / resources | Modeled | Lazy | |
 | COFF symbol table + strtab | Modeled | Lazy — `PE::coff_symbols` | Long section names via `strings::pe_section_name` |
@@ -71,7 +71,18 @@ method call; “Eager” structures are filled during `from_buffer`.
 |-----|----------|
 | `PE::section_data`, `ELF::section_data` | Zero-copy `&[u8]` views into `buffer` |
 | `PE::imports`, `PE::exports`, ELF/Mach-O symbol tables | Lazy parse; allocates `Vec` of entries |
-| `PE::base_relocations` | Eager at parse time (large but usually small) |
-| `reloc::pe_parse_base_relocations` | On-demand re-parse of `.reloc` |
+| `PE::base_relocations()` | On demand; collects blocks and entries |
+| `reloc::pe_parse_base_relocations` | Delegates to lazy `PE::base_relocations()` |
+| `PE::imports_iter`, `exports_iter`, `export_functions_iter` | Streaming entries and borrowed names; imports allocate only for lossy UTF-8 |
+| `PE::base_relocations_iter`, `debug_iter` | Streaming records without allocation |
+| `PE::rva_index` | Optional allocated index; immutable borrows, overlap fallback |
+| `ElfHeaders::program`, `section` | Direct entry parsing without allocation |
+| `MachHeaders::commands` | O(n) command traversal without allocation |
+| `FatHeaders::arch`, `slice` | Selected FAT metadata and bytes without allocation |
+| `ELF::section_name_ref`, `SymbolTable::name_ref`, `MachO::linked_dylibs_iter` | Borrow valid UTF-8, allocate only for lossy decoding |
 
 [`Field`]: https://docs.rs/hexspell/latest/hexspell/field/struct.Field.html
+
+All three format types support borrowed file buffers through `from_slice`, with the same eager header/table parsing and lazy payload parsers as owned inputs. Mach-O FAT selection borrows the selected thin image.
+
+Header-only views: `elf::view::ElfHeaders` models the ELF file header with individual program/section entries on demand, including extended counts. `macho::view::MachHeaders` models a thin Mach-O file header with load-command headers on demand. Neither eagerly validates payloads.

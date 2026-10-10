@@ -54,7 +54,7 @@ pub fn find_overlaps(ranges: &[FileRange]) -> Vec<Overlap> {
 }
 
 /// File-backed PE section ranges (`PointerToRawData` .. `+SizeOfRawData`).
-pub fn pe_file_ranges(pe: &PE) -> Vec<FileRange> {
+pub fn pe_file_ranges<B: core::ops::Deref<Target = [u8]>>(pe: &PE<B>) -> Vec<FileRange> {
     pe.sections
         .iter()
         .enumerate()
@@ -75,7 +75,7 @@ pub fn pe_file_ranges(pe: &PE) -> Vec<FileRange> {
 }
 
 /// File-backed ELF section ranges (`sh_offset` .. `+sh_size`, skipping `SHT_NOBITS`).
-pub fn elf_file_ranges(elf: &ELF) -> Vec<FileRange> {
+pub fn elf_file_ranges<B: core::ops::Deref<Target = [u8]>>(elf: &ELF<B>) -> Vec<FileRange> {
     elf.section_headers
         .iter()
         .enumerate()
@@ -98,7 +98,7 @@ pub fn elf_file_ranges(elf: &ELF) -> Vec<FileRange> {
 }
 
 /// File-backed Mach-O segment ranges (`fileoff` .. `+filesize`).
-pub fn macho_file_ranges(macho: &MachO) -> Vec<FileRange> {
+pub fn macho_file_ranges<B: core::ops::Deref<Target = [u8]>>(macho: &MachO<B>) -> Vec<FileRange> {
     macho
         .segments
         .iter()
@@ -119,12 +119,18 @@ pub fn macho_file_ranges(macho: &MachO) -> Vec<FileRange> {
 }
 
 /// Maps a PE RVA to a file offset (wrapper around [`PE::rva_to_offset`]).
-pub fn pe_rva_to_file_offset(pe: &PE, rva: u32) -> Result<usize, FileParseError> {
+pub fn pe_rva_to_file_offset<B: core::ops::Deref<Target = [u8]>>(
+    pe: &PE<B>,
+    rva: u32,
+) -> Result<usize, FileParseError> {
     pe.rva_to_offset(rva)
 }
 
 /// Maps a PE VA (preferred image base + RVA) to a file offset.
-pub fn pe_va_to_file_offset(pe: &PE, va: u64) -> Result<usize, FileParseError> {
+pub fn pe_va_to_file_offset<B: core::ops::Deref<Target = [u8]>>(
+    pe: &PE<B>,
+    va: u64,
+) -> Result<usize, FileParseError> {
     let base = match pe.optional_header.image_base.value {
         ImageBase::Base32(v) => v as u64,
         ImageBase::Base64(v) => v,
@@ -137,7 +143,10 @@ pub fn pe_va_to_file_offset(pe: &PE, va: u64) -> Result<usize, FileParseError> {
 }
 
 /// Maps an ELF virtual address to a file offset using `PT_LOAD` segments.
-pub fn elf_va_to_file_offset(elf: &ELF, va: u64) -> Result<usize, FileParseError> {
+pub fn elf_va_to_file_offset<B: core::ops::Deref<Target = [u8]>>(
+    elf: &ELF<B>,
+    va: u64,
+) -> Result<usize, FileParseError> {
     for ph in &elf.program_headers {
         if ph.p_type() != crate::elf::program::PT_LOAD {
             continue;
@@ -160,7 +169,10 @@ pub fn elf_va_to_file_offset(elf: &ELF, va: u64) -> Result<usize, FileParseError
 }
 
 /// Maps a Mach-O virtual address to a file offset using segment load commands.
-pub fn macho_va_to_file_offset(macho: &MachO, va: u64) -> Result<usize, FileParseError> {
+pub fn macho_va_to_file_offset<B: core::ops::Deref<Target = [u8]>>(
+    macho: &MachO<B>,
+    va: u64,
+) -> Result<usize, FileParseError> {
     for seg in &macho.segments {
         let base = seg.vmaddr();
         let size = seg.vmsize();
@@ -186,7 +198,7 @@ pub struct ValidationIssue {
 }
 
 /// Checks PE header/section invariants that HexSpell relies on when patching.
-pub fn pe_consistency(pe: &PE) -> Vec<ValidationIssue> {
+pub fn pe_consistency<B: core::ops::Deref<Target = [u8]>>(pe: &PE<B>) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
     let expected_optional = pe.coff_header.size_of_optional_header.value as usize;
@@ -228,7 +240,7 @@ pub fn pe_consistency(pe: &PE) -> Vec<ValidationIssue> {
 }
 
 /// Checks ELF program/section header consistency.
-pub fn elf_consistency(elf: &ELF) -> Vec<ValidationIssue> {
+pub fn elf_consistency<B: core::ops::Deref<Target = [u8]>>(elf: &ELF<B>) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
     let ph_end = elf.header.ph_off.value as usize
@@ -260,7 +272,9 @@ pub fn elf_consistency(elf: &ELF) -> Vec<ValidationIssue> {
 }
 
 /// Checks Mach-O load-command size accounting.
-pub fn macho_consistency(macho: &MachO) -> Vec<ValidationIssue> {
+pub fn macho_consistency<B: core::ops::Deref<Target = [u8]>>(
+    macho: &MachO<B>,
+) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
     let hdr_size = if macho.header.reserved.is_some() {

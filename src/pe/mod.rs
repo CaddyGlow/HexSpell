@@ -36,6 +36,7 @@ pub mod import;
 pub mod layout;
 pub mod linenum;
 pub mod load_config;
+pub mod read;
 pub mod relocation;
 pub mod resource;
 pub mod rich;
@@ -45,10 +46,10 @@ pub mod symbol;
 pub mod tls;
 pub mod view;
 
-/// A parsed PE image backed by an owned byte buffer.
-pub struct PE {
+/// A parsed PE image backed by owned bytes (by default) or a borrowed slice.
+pub struct PE<B = Vec<u8>> {
     /// Full file contents; pass slices of this to [`crate::field::Field::update`].
-    pub buffer: Vec<u8>,
+    pub buffer: B,
     /// DOS stub header (`IMAGE_DOS_HEADER`).
     pub dos_header: dos::DosHeader,
     /// COFF file header (`IMAGE_FILE_HEADER`).
@@ -57,11 +58,80 @@ pub struct PE {
     pub optional_header: header::OptionalHeader,
     /// Section table entries in file order.
     pub sections: Vec<section::PeSection>,
-    /// Base relocation blocks from `IMAGE_DIRECTORY_ENTRY_BASERELOC`.
-    pub base_relocations: Vec<relocation::BaseRelocationBlock>,
 }
 
-impl PE {
+impl<B: core::ops::Deref<Target = [u8]>> PE<B> {
+    /// Parses base relocations on demand from the current buffer.
+    pub fn base_relocations(&self) -> Result<Vec<relocation::BaseRelocationBlock>, FileParseError> {
+        self.base_relocations_iter()?
+            .map(|block| block.map(|block| block.to_owned()))
+            .collect()
+    }
+
+    /// Iterates borrowed relocation blocks without collecting their entries.
+    pub fn base_relocations_iter(&self) -> Result<read::Relocations<'_>, FileParseError> {
+        let (offset, size) = self.directory_range(header::BASERELOC)?;
+        read::Relocations::new(&self.buffer, offset, size)
+    }
+
+    /// Iterates imports, borrowing names and storing each descriptor once.
+    pub fn imports_iter(&self) -> Result<read::Imports<'_>, FileParseError> {
+        let entry = &self.optional_header.data_directories[header::IMPORT];
+        read::Imports::new(
+            &self.buffer,
+            &self.sections,
+            entry.virtual_address.value,
+            self.optional_header.pe_type()?,
+        )
+    }
+
+    /// Iterates named exports, borrowing their UTF-8 names.
+    pub fn exports_iter(&self) -> Result<read::Exports<'_>, FileParseError> {
+        let entry = &self.optional_header.data_directories[header::EXPORT];
+        read::Exports::new(
+            &self.buffer,
+            &self.sections,
+            entry.virtual_address.value,
+            entry.size.value,
+        )
+    }
+
+    /// Iterates the full export address table, including ordinal-only exports and forwarders.
+    pub fn export_functions_iter(&self) -> Result<read::ExportFunctions<'_>, FileParseError> {
+        let entry = &self.optional_header.data_directories[header::EXPORT];
+        read::ExportFunctions::new(
+            &self.buffer,
+            &self.sections,
+            entry.virtual_address.value,
+            entry.size.value,
+        )
+    }
+
+    /// Iterates debug directory records without collecting them.
+    pub fn debug_iter(&self) -> Result<read::DebugEntries<'_>, FileParseError> {
+        let (offset, size) = self.directory_range(header::DEBUG)?;
+        read::DebugEntries::new(&self.buffer, offset, size)
+    }
+
+    /// Builds an optional lookup index that borrows the current buffer and section table.
+    pub fn rva_index(&self) -> read::RvaIndex<'_> {
+        read::RvaIndex::new(&self.buffer, &self.sections)
+    }
+
+    fn directory_range(&self, index: usize) -> Result<(usize, usize), FileParseError> {
+        if !self.optional_header.has_data_directory(index) {
+            return Ok((0, 0));
+        }
+        let entry = &self.optional_header.data_directories[index];
+        if entry.virtual_address.value == 0 || entry.size.value == 0 {
+            return Ok((0, 0));
+        }
+        Ok((
+            self.rva_to_offset(entry.virtual_address.value)?,
+            entry.size.value as usize,
+        ))
+    }
+
     /// Returns the target architecture derived from the COFF `machine` field.
     pub fn architecture(&self) -> header::Architecture {
         self.coff_header.architecture()
@@ -370,7 +440,9 @@ impl PE {
             |rva| self.rva_to_offset(rva),
         )
     }
+}
 
+impl PE {
     /// Updates a data directory RVA in the optional header and buffer.
     pub fn sync_data_directory_rva(
         &mut self,
@@ -411,9 +483,10 @@ impl PE {
             header::ImageBase::Base64(value) => value,
         };
 
+        let base_relocations = self.base_relocations()?;
         relocation::apply_base_relocations(
             &mut self.buffer,
-            &self.base_relocations,
+            &base_relocations,
             &self.sections,
             old_base,
             new_base_value,
@@ -426,7 +499,9 @@ impl PE {
 
         Ok(())
     }
+}
 
+impl<B: core::ops::Deref<Target = [u8]>> PE<B> {
     /// Writes [`PE::buffer`] to `output_path`.
     #[cfg(feature = "std")]
     pub fn write_file(&self, output_path: &str) -> io::Result<()> {
@@ -474,7 +549,9 @@ impl PE {
         }
         (checksum + len as u64) as u32
     }
+}
 
+impl PE {
     /// Reads and parses a PE file from disk.
     #[cfg(feature = "std")]
     pub fn from_file(path: &str) -> Result<PE, FileParseError> {
@@ -484,59 +561,7 @@ impl PE {
 
     /// Parses a PE image from an owned byte buffer.
     pub fn from_buffer(buffer: Vec<u8>) -> Result<Self, FileParseError> {
-        let dos_header = dos::DosHeader::parse(&buffer)?;
-        let pe_header_offset = dos_header.e_lfanew.value as usize;
-
-        if buffer.len() < pe_header_offset + 24
-            || &buffer[pe_header_offset..pe_header_offset + 4] != b"PE\0\0"
-        {
-            return Err(FileParseError::InvalidFileFormat);
-        }
-
-        let coff_offset = pe_header_offset + 4;
-        let coff_header = coff::CoffFileHeader::parse(&buffer, coff_offset)?;
-        let optional_header_offset = coff_offset + 20;
-        let optional_header_size = coff_header.size_of_optional_header.value as usize;
-        let sections_offset = optional_header_offset + optional_header_size;
-        let number_of_sections = coff_header.number_of_sections.value;
-
-        if buffer.len() < optional_header_offset + optional_header_size {
-            return Err(FileParseError::BufferOverflow);
-        }
-
-        let optional_header = header::OptionalHeader::parse(&buffer, optional_header_offset)?;
-
-        let mut sections = Vec::with_capacity(number_of_sections as usize);
-        let mut current_offset = sections_offset;
-        for _ in 0..number_of_sections {
-            let section = section::PeSection::parse_section(&buffer, current_offset)?;
-            sections.push(section);
-            current_offset += 40;
-        }
-
-        let base_relocations = if optional_header.number_of_rva_and_sizes.value
-            > header::BASERELOC as u32
-        {
-            let directory = &optional_header.data_directories[header::BASERELOC];
-            if directory.virtual_address.value == 0 || directory.size.value == 0 {
-                Vec::new()
-            } else {
-                let offset =
-                    import::rva_to_offset(&buffer, &sections, directory.virtual_address.value)?;
-                relocation::parse_base_relocations(&buffer, offset, directory.size.value as usize)?
-            }
-        } else {
-            Vec::new()
-        };
-
-        Ok(PE {
-            buffer,
-            dos_header,
-            coff_header,
-            optional_header,
-            sections,
-            base_relocations,
-        })
+        Self::parse_buffer(buffer)
     }
 
     fn build_section_header(
@@ -734,5 +759,67 @@ impl PE {
             .update(&mut self.buffer, new_checksum)?;
 
         Ok(())
+    }
+    /// Parses borrowed bytes without copying the file buffer.
+    ///
+    /// Headers and tables are still allocated. Use `from_buffer` for editing.
+    ///
+    /// Borrowed buffers cannot be patched:
+    /// ```compile_fail
+    /// use hexspell::pe::PE;
+    /// let mut image = PE::from_slice(&[]).unwrap();
+    /// image.coff_header.time_date_stamp.update(&mut image.buffer, 0).unwrap();
+    /// ```
+    pub fn from_slice(buffer: &[u8]) -> Result<PE<&[u8]>, FileParseError> {
+        PE::parse_buffer(buffer)
+    }
+}
+
+impl<B: core::ops::Deref<Target = [u8]>> PE<B> {
+    fn parse_buffer(buffer: B) -> Result<Self, FileParseError> {
+        let dos_header = dos::DosHeader::parse(&buffer)?;
+        let pe_header_offset = dos_header.e_lfanew.value as usize;
+
+        if buffer.len() < pe_header_offset + 24
+            || &buffer[pe_header_offset..pe_header_offset + 4] != b"PE\0\0"
+        {
+            return Err(FileParseError::InvalidFileFormat);
+        }
+
+        let coff_offset = pe_header_offset + 4;
+        let coff_header = coff::CoffFileHeader::parse(&buffer, coff_offset)?;
+        let optional_header_offset = coff_offset + 20;
+        let optional_header_size = coff_header.size_of_optional_header.value as usize;
+        let sections_offset = optional_header_offset + optional_header_size;
+        let number_of_sections = coff_header.number_of_sections.value;
+
+        if buffer.len() < optional_header_offset + optional_header_size {
+            return Err(FileParseError::BufferOverflow);
+        }
+
+        let optional_header = header::OptionalHeader::parse(&buffer, optional_header_offset)?;
+
+        let sections_end = usize::from(number_of_sections)
+            .checked_mul(40)
+            .and_then(|size| sections_offset.checked_add(size))
+            .ok_or(FileParseError::BufferOverflow)?;
+        buffer
+            .get(sections_offset..sections_end)
+            .ok_or(FileParseError::BufferOverflow)?;
+        let mut sections = Vec::with_capacity(number_of_sections as usize);
+        let mut current_offset = sections_offset;
+        for _ in 0..number_of_sections {
+            let section = section::PeSection::parse_section(&buffer, current_offset)?;
+            sections.push(section);
+            current_offset += 40;
+        }
+
+        Ok(PE {
+            buffer,
+            dos_header,
+            coff_header,
+            optional_header,
+            sections,
+        })
     }
 }

@@ -61,7 +61,7 @@ scope, and the CSV records min/median/max ns per iteration and iteration counts.
 |---|---|
 | HexSpell borrowed headers | `PeHeaders::parse`: DOS/NT/COFF only; optional fields and sections remain unread |
 | HexSpell borrowed all header fields and sections | Optional-header field decoding and section iteration, without copying the input buffer or collecting sections |
-| HexSpell owned default | `PE::from_buffer`, including buffer clone, eager headers/sections/base relocations |
+| HexSpell owned default | `PE::from_buffer`, including buffer clone, eager headers/sections; base relocations are lazy |
 | HexSpell supported directories | Owned parse plus imports, exports, resources, TLS, debug, load config, bound/delay imports, and AMD64 exceptions |
 | object | Borrowed `PeFile32`/`PeFile64` and section iteration |
 | Goblin default | Borrowed default `PE::parse`, including its default directory processing |

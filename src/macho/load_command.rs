@@ -4,6 +4,7 @@
 //! HexSpell models are additionally exposed as typed views through [`LoadCommand::typed`] and the
 //! per-kind parsers in this module.
 
+use alloc::borrow::Cow;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -447,38 +448,65 @@ impl LoadCommand {
         Ok(Some(typed))
     }
 
+    /// Borrows the name of a dylib command, allocating only for lossy UTF-8.
+    ///
+    /// Returns `None` for other command types, without parsing their payloads.
+    pub fn dylib_name_ref<'a>(
+        &self,
+        buffer: &'a [u8],
+        order: ByteOrder,
+    ) -> Result<Option<Cow<'a, str>>, errors::FileParseError> {
+        if !matches!(
+            self.cmd.value,
+            LC_LOAD_DYLIB
+                | LC_ID_DYLIB
+                | LC_LOAD_WEAK_DYLIB
+                | LC_REEXPORT_DYLIB
+                | LC_LAZY_LOAD_DYLIB
+        ) {
+            return Ok(None);
+        }
+        let start = self.cmd.offset;
+        if self.cmdsize.value < 24 {
+            return Err(errors::FileParseError::InvalidFileFormat);
+        }
+        let end = start
+            .checked_add(self.cmdsize.value as usize)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        let command = buffer
+            .get(start..end)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        let relative = order.read_u32(command, 8)? as usize;
+        if relative < 24 {
+            return Err(errors::FileParseError::InvalidFileFormat);
+        }
+        let tail = command
+            .get(relative..)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        let stop = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
+        Ok(Some(String::from_utf8_lossy(&tail[..stop])))
+    }
+
     pub(crate) fn parse_load_commands(
         buffer: &[u8],
         offset: usize,
         ncmds: u32,
+        size: u32,
         order: ByteOrder,
     ) -> Result<Vec<Self>, errors::FileParseError> {
-        let mut commands = Vec::new();
-        let mut current_offset = offset;
-
-        for _ in 0..ncmds {
-            if buffer.len() < current_offset + 8 {
-                return Err(errors::FileParseError::BufferOverflow);
-            }
-
-            let cmd = Field::new(order.read_u32(buffer, current_offset)?, current_offset, 4);
-            let cmdsize = Field::new(
-                order.read_u32(buffer, current_offset + 4)?,
-                current_offset + 4,
-                4,
-            );
-
-            if cmdsize.value == 0 {
-                return Err(errors::FileParseError::InvalidFileFormat);
-            }
-
-            commands.push(LoadCommand {
-                cmd,
-                cmdsize: cmdsize.clone(),
-            });
-            current_offset += cmdsize.value as usize;
+        let end = offset
+            .checked_add(size as usize)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        buffer
+            .get(offset..end)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        if ncmds as usize > size as usize / 8 {
+            return Err(errors::FileParseError::InvalidFileFormat);
         }
-
+        let mut commands = Vec::with_capacity(ncmds as usize);
+        for command in LoadCommands::new(buffer, order, offset, size, ncmds) {
+            commands.push(command?);
+        }
         Ok(commands)
     }
 }
@@ -524,3 +552,93 @@ fn read_lc_string(
     let stop = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
     Ok(String::from_utf8_lossy(&slice[..stop]).into_owned())
 }
+
+/// Allocation-free, single-pass traversal of load-command headers.
+///
+/// Returns an error once for a malformed command, then stops.
+pub struct LoadCommands<'a> {
+    bytes: &'a [u8],
+    order: ByteOrder,
+    offset: usize,
+    end: Option<usize>,
+    remaining: u32,
+}
+
+impl<'a> LoadCommands<'a> {
+    pub(crate) fn new(
+        bytes: &'a [u8],
+        order: ByteOrder,
+        offset: usize,
+        size: u32,
+        count: u32,
+    ) -> Self {
+        Self {
+            bytes,
+            order,
+            offset,
+            end: offset.checked_add(size as usize),
+            remaining: count,
+        }
+    }
+
+    fn read(&mut self) -> Result<LoadCommand, errors::FileParseError> {
+        let end = self.end.ok_or(errors::FileParseError::BufferOverflow)?;
+        let header_end = self
+            .offset
+            .checked_add(8)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        if header_end > end {
+            return Err(errors::FileParseError::BufferOverflow);
+        }
+        let cmd = Field::new(
+            self.order.read_u32(self.bytes, self.offset)?,
+            self.offset,
+            4,
+        );
+        let cmdsize = Field::new(
+            self.order.read_u32(self.bytes, self.offset + 4)?,
+            self.offset + 4,
+            4,
+        );
+        if cmdsize.value < 8 {
+            return Err(errors::FileParseError::InvalidFileFormat);
+        }
+        let next = self
+            .offset
+            .checked_add(cmdsize.value as usize)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        if next > end {
+            return Err(errors::FileParseError::BufferOverflow);
+        }
+        self.bytes
+            .get(self.offset..next)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        self.offset = next;
+        Ok(LoadCommand { cmd, cmdsize })
+    }
+}
+
+impl Iterator for LoadCommands<'_> {
+    type Item = Result<LoadCommand, errors::FileParseError>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let result = self.read();
+        self.remaining = if result.is_err() {
+            0
+        } else {
+            self.remaining - 1
+        };
+        Some(result)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (
+            usize::from(self.remaining != 0),
+            Some(self.remaining as usize),
+        )
+    }
+}
+
+impl core::iter::FusedIterator for LoadCommands<'_> {}

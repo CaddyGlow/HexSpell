@@ -20,13 +20,28 @@
 >     - *Added*: Your message here using `markdown`.
 
 
-## [Unreleased]
+## [1.2.0] - 2026-10-11
+
+- **General**
+    - *Added*: Borrowed `from_slice` parsing for PE, ELF, and Mach-O without copying the file buffer; owned parsing retains editing support.
+    - *Added*: Borrowed string and string-pool accessors, allocation regression tests, and a dependency-free release benchmark (`cargo bench --bench parsing`).
+    - *Changed*: Package version is 1.2.0; breaking migrations are documented below and in the guide.
 
 - **PE**
+    - *Added*: Streaming imports, named/function exports, relocation blocks/entries, and debug records; borrowed names and forwarders; optional immutable RVA lookup index with overlap fallback.
+    - *Changed*: **Breaking** — replace eager `PE::base_relocations` with fallible `base_relocations()` and `base_relocations_iter()`; relocation errors are deferred until directory access or image-base editing.
+    - *Changed*: **Breaking** — remove duplicated `ImportDirectory::descriptors` storage; use `descriptors()` or each DLL's `descriptor` field.
+    - *Changed*: Validate section/export table extents before reserving capacity.
     - *Fixed*: Correct PE32 load configuration affinity, version, EditList, and security cookie offsets; correct CHPE pointer offsets, widths, and VA-to-RVA conversion.
     - *Fixed*: Correct debug directory RVA/file-pointer field ordering and preserve the full file length in checksum calculations.
     - *Fixed*: Preserve raw section alignment and payloads during section removal and optional-header growth; retain overlays during insertion and rebase COFF, certificate, section metadata, and debug file pointers during file shifts.
 
+- **ELF**
+    - *Added*: Borrowed, allocation-free header-only `ElfHeaders` parsing with program and section headers available on demand; borrowed section/symbol name accessors.
+    - *Changed*: Parse individual program/section entries directly; validate table sizes before reserving capacity; section-name lookup borrows names.
+- **Mach-O**
+    - *Added*: Borrowed, allocation-free thin header-only `MachHeaders` parsing, single-pass command iteration, borrowed FAT metadata selection, and borrowed dylib paths.
+    - *Changed*: Validate command/segment/section extents before reserving capacity. Disk-based FAT selection reads only the chosen record and thin slice.
 
 ## [1.1.2] - 2026-10-10
 

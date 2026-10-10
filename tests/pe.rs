@@ -448,16 +448,17 @@ fn test_pe64_base_relocations() {
 
     let pe = pe::PE::from_file("tests/samples/sample64.exe").expect("Failed to parse PE64");
 
-    assert_eq!(pe.base_relocations.len(), 4);
+    assert_eq!(pe.base_relocations().unwrap().len(), 4);
     assert_eq!(
-        pe.base_relocations
+        pe.base_relocations()
+            .unwrap()
             .iter()
             .map(|block| block.entries.len())
             .sum::<usize>(),
         44
     );
 
-    let first = &pe.base_relocations[0];
+    let first = &pe.base_relocations().unwrap()[0];
     assert_eq!(first.page_rva.value, 0x2000);
     assert_eq!(first.page_rva.offset, 0x3a00);
     assert_eq!(first.block_size.value, 0x0c);
@@ -468,7 +469,7 @@ fn test_pe64_base_relocations() {
     assert_eq!(first.entries[0].rva(first.page_rva.value), 0x2738);
     assert_eq!(first.entries[1].relocation_type(), IMAGE_REL_BASED_ABSOLUTE);
 
-    let last = &pe.base_relocations[3];
+    let last = &pe.base_relocations().unwrap()[3];
     assert_eq!(last.page_rva.value, 0x9000);
     assert_eq!(last.block_size.value, 0x10);
     assert_eq!(last.entries.len(), 4);
@@ -584,10 +585,10 @@ fn test_pe_imports_sample1() {
     let imports = pe.imports().expect("Failed to parse imports");
 
     assert_eq!(imports.offset, 0x4c00);
-    assert_eq!(imports.descriptors.len(), 5);
+    assert_eq!(imports.descriptors().len(), 5);
     assert_eq!(imports.dlls.len(), 5);
 
-    let desc = &imports.descriptors[0];
+    let desc = &imports.dlls[0].descriptor;
     assert_eq!(desc.original_first_thunk.value, 0x9078);
     assert_eq!(desc.original_first_thunk.offset, imports.offset);
     assert_eq!(desc.first_thunk.value, 0x9184);
@@ -627,7 +628,7 @@ fn test_pe_imports_sample1() {
         pe.optional_header.pe_type().unwrap(),
     )
     .unwrap();
-    assert!(empty.descriptors.is_empty());
+    assert!(empty.descriptors().len() == 0);
     assert!(empty.dlls.is_empty());
 }
 
@@ -834,9 +835,10 @@ fn test_pe_apply_image_base_with_relocations() {
     use pe::header::ImageBase;
 
     let mut pe = pe::PE::from_file("tests/samples/sample2.dll").expect("Failed to parse PE");
-    assert!(!pe.base_relocations.is_empty());
+    assert!(!pe.base_relocations().unwrap().is_empty());
 
-    let target_rva = pe.base_relocations[0].entries[0].rva(pe.base_relocations[0].page_rva.value);
+    let target_rva = pe.base_relocations().unwrap()[0].entries[0]
+        .rva(pe.base_relocations().unwrap()[0].page_rva.value);
     let target_off = pe.rva_to_offset(target_rva).unwrap();
     let before = u32::from_le_bytes([
         pe.buffer[target_off],

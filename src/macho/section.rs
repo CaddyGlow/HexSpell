@@ -206,7 +206,37 @@ impl SectionEntry {
         load_commands: &[LoadCommand],
         order: ByteOrder,
     ) -> Result<Vec<Self>, FileParseError> {
-        let mut sections = Vec::new();
+        let mut count: usize = 0;
+        for cmd in load_commands {
+            let (header, record, count_offset): (usize, usize, usize) = match cmd.cmd.value {
+                LC_SEGMENT => (56, 68, 48),
+                LC_SEGMENT_64 => (72, 80, 64),
+                _ => continue,
+            };
+            if (cmd.cmdsize.value as usize) < header {
+                return Err(FileParseError::InvalidFileFormat);
+            }
+            let command_end = cmd
+                .cmd
+                .offset
+                .checked_add(cmd.cmdsize.value as usize)
+                .ok_or(FileParseError::BufferOverflow)?;
+            buffer
+                .get(cmd.cmd.offset..command_end)
+                .ok_or(FileParseError::BufferOverflow)?;
+            let nsects = order.read_u32(buffer, cmd.cmd.offset + count_offset)? as usize;
+            let required = nsects
+                .checked_mul(record)
+                .and_then(|size| header.checked_add(size))
+                .ok_or(FileParseError::BufferOverflow)?;
+            if required > cmd.cmdsize.value as usize {
+                return Err(FileParseError::BufferOverflow);
+            }
+            count = count
+                .checked_add(nsects)
+                .ok_or(FileParseError::BufferOverflow)?;
+        }
+        let mut sections = Vec::with_capacity(count);
 
         for cmd in load_commands {
             let is_64 = match cmd.cmd.value {
