@@ -20,6 +20,12 @@
 >     - *Added*: Your message here using `markdown`.
 
 
+## [Unreleased]
+
+- **PE**
+    - *Fixed*: Return `BufferOverflow` for overflowing TLS directory offsets in both PE32 and PE32+ layouts instead of panicking.
+
+
 ## [1.0.0] - 2026-07-07
 
 - **General**
