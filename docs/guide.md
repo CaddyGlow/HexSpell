@@ -63,6 +63,19 @@ pe.insert_section(NewSection {
 pe.write_file("app-section.exe")?;
 ```
 
+Section insertion preserves trailing overlays. File shifts rebase section raw
+data, COFF symbol/relocation/line-number pointers, the certificate directory,
+and debug raw-data pointers. Optional-header growth keeps raw sections aligned
+to `FileAlignment`. Section removal compacts the section table without shifting
+the remaining file data by a section-header width. These helpers do not rebuild
+arbitrary references embedded in machine code or directory payloads when a
+middle section's RVA is removed.
+
+The optional [pefile verification suite](../tests/scripts/README.md) compares
+field values, offsets, and widths and checks serialized images after edits.
+The [PE benchmark tool](../tools/pe-bench/README.md) provides a reproducible
+corpus and separate parsing scopes for HexSpell, Goblin, object, and pefile.
+
 ## ELF (Linux)
 
 ELF endianness is stored in `header.ei_data`. Use [`ELF::byte_order`] as a convenience alias.

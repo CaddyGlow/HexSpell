@@ -31,7 +31,7 @@ pub struct LoadConfigDirectory {
     pub maximum_allocation_size: Field<u64>,
     /// Virtual memory threshold (4 or 8 bytes on disk).
     pub virtual_memory_threshold: Field<u64>,
-    /// Process affinity mask (PE32+ only).
+    /// Process affinity mask (four bytes in PE32, eight in PE32+).
     pub process_affinity_mask: Option<Field<u64>>,
     /// Process heap flags.
     pub process_heap_flags: Field<u32>,
@@ -101,16 +101,16 @@ impl LoadConfigDirectory {
                     lock_prefix_table: Field::new(read_u64(offset + 32)?, offset + 32, 4),
                     maximum_allocation_size: Field::new(read_u64(offset + 36)?, offset + 36, 4),
                     virtual_memory_threshold: Field::new(read_u64(offset + 40)?, offset + 40, 4),
-                    process_affinity_mask: None,
+                    process_affinity_mask: Some(Field::new(read_u64(offset + 48)?, offset + 48, 4)),
                     process_heap_flags: Field::new(
                         extract_u32(buffer, offset + 44)?,
                         offset + 44,
                         4,
                     ),
-                    csd_version: Field::new(extract_u16(buffer, offset + 48)?, offset + 48, 2),
-                    reserved1: Field::new(extract_u16(buffer, offset + 50)?, offset + 50, 2),
-                    reserved2: Field::new(extract_u32(buffer, offset + 52)?, offset + 52, 4),
-                    security_cookie: Field::new(read_u64(offset + 56)?, offset + 56, 4),
+                    csd_version: Field::new(extract_u16(buffer, offset + 52)?, offset + 52, 2),
+                    reserved1: Field::new(extract_u16(buffer, offset + 54)?, offset + 54, 2),
+                    reserved2: Field::new(extract_u32(buffer, offset + 56)?, offset + 56, 4),
+                    security_cookie: Field::new(read_u64(offset + 60)?, offset + 60, 4),
                 })
             }
             PEType::PE32Plus => Ok(LoadConfigDirectory {

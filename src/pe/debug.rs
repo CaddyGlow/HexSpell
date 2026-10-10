@@ -54,8 +54,8 @@ impl DebugDirectoryEntry {
             minor_version: Field::new(extract_u16(buffer, offset + 10)?, offset + 10, 2),
             debug_type: Field::new(extract_u32(buffer, offset + 12)?, offset + 12, 4),
             size_of_data: Field::new(extract_u32(buffer, offset + 16)?, offset + 16, 4),
-            pointer_to_raw_data: Field::new(extract_u32(buffer, offset + 20)?, offset + 20, 4),
-            address_of_raw_data: Field::new(extract_u32(buffer, offset + 24)?, offset + 24, 4),
+            pointer_to_raw_data: Field::new(extract_u32(buffer, offset + 24)?, offset + 24, 4),
+            address_of_raw_data: Field::new(extract_u32(buffer, offset + 20)?, offset + 20, 4),
         })
     }
 

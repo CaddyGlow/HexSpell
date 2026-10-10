@@ -340,7 +340,16 @@ impl PE {
                         self.optional_header.pe_type()?,
                     ) {
                         Ok(fields) => {
-                            let pointer = fields.hybrid_metadata_pointer.map(|f| f.value);
+                            let image_base = match self.optional_header.image_base.value {
+                                header::ImageBase::Base32(value) => value as u64,
+                                header::ImageBase::Base64(value) => value,
+                            };
+                            // CHPEMetadataPointer is a VA, while architecture
+                            // metadata is located using an RVA-to-file mapper.
+                            let pointer = fields
+                                .hybrid_metadata_pointer
+                                .and_then(|f| f.value.checked_sub(image_base))
+                                .filter(|&rva| rva <= u32::MAX as u64);
                             (pointer, pointer)
                         }
                         Err(_) => (None, None),
@@ -460,11 +469,10 @@ impl PE {
             }
         }
 
-        checksum = (checksum & 0xFFFF) + (checksum >> 16);
-        checksum += len as u64;
-        checksum = (checksum & 0xFFFF) + (checksum >> 16);
-        checksum = (checksum & 0xFFFF) + (checksum >> 16);
-        checksum as u32
+        while checksum >> 16 != 0 {
+            checksum = (checksum & 0xFFFF) + (checksum >> 16);
+        }
+        (checksum + len as u64) as u32
     }
 
     /// Reads and parses a PE file from disk.
@@ -605,6 +613,8 @@ impl PE {
         shellcode: Vec<u8>,
     ) -> Result<(), FileParseError> {
         const SECTION_HEADER_SIZE: usize = 40;
+        let fixups = layout::FileOffsetFixups::capture(self)?;
+        let mut file_edits = Vec::new();
 
         let mut header_pad_diff = 0usize;
         if new_section.characteristics.offset + new_section.characteristics.size
@@ -632,6 +642,7 @@ impl PE {
                         header_splice_at..header_splice_at,
                         core::iter::repeat_n(0, diff),
                     );
+                    file_edits.push((header_splice_at, 0, diff));
 
                     for section in self.sections.iter_mut() {
                         section.pointer_to_raw_data.update(
@@ -663,9 +674,17 @@ impl PE {
         let raw_data_ptr = new_section.pointer_to_raw_data.value;
         let new_total_buffer_size =
             raw_data_ptr as usize + new_section.size_of_raw_data.value as usize;
-        if self.buffer.len() < new_total_buffer_size {
+        if (raw_data_ptr as usize) < self.buffer.len() {
+            let raw_size = new_section.size_of_raw_data.value as usize;
+            self.buffer.splice(
+                raw_data_ptr as usize..raw_data_ptr as usize,
+                core::iter::repeat_n(0, raw_size),
+            );
+            file_edits.push((raw_data_ptr as usize, 0, raw_size));
+        } else if self.buffer.len() < new_total_buffer_size {
             self.buffer.resize(new_total_buffer_size, 0);
         }
+        fixups.apply(&mut self.buffer, &file_edits)?;
 
         let mut section_header_buffer = Vec::with_capacity(SECTION_HEADER_SIZE);
         section_header_buffer.extend_from_slice(&new_section.name.value.0);
@@ -704,6 +723,10 @@ impl PE {
         )?;
 
         self.sections.push(new_section);
+
+        // File-offset fixups may also change COFF and security directory fields.
+        let buffer = core::mem::take(&mut self.buffer);
+        *self = PE::from_buffer(buffer)?;
 
         let new_checksum = self.calc_checksum();
         self.optional_header

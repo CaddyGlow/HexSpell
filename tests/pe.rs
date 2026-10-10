@@ -1058,12 +1058,16 @@ fn test_pe_debug_directory_synthetic() {
     let offset = 0x20usize;
     buffer[offset + 12..offset + 16].copy_from_slice(&IMAGE_DEBUG_TYPE_CODEVIEW.to_le_bytes());
     buffer[offset + 16..offset + 20].copy_from_slice(&8u32.to_le_bytes());
-    buffer[offset + 20..offset + 24].copy_from_slice(&0x80u32.to_le_bytes());
+    buffer[offset + 20..offset + 24].copy_from_slice(&0x1080u32.to_le_bytes());
+    buffer[offset + 24..offset + 28].copy_from_slice(&0x80u32.to_le_bytes());
     buffer[0x80..0x88].copy_from_slice(b"RSDS\x00\x00\x00\x00");
 
     let debug = DebugDirectory::parse(&buffer, offset, 28).unwrap();
     assert_eq!(debug.entries.len(), 1);
     assert_eq!(debug.entries[0].debug_type.value, IMAGE_DEBUG_TYPE_CODEVIEW);
+    assert_eq!(debug.entries[0].address_of_raw_data.value, 0x1080);
+    assert_eq!(debug.entries[0].address_of_raw_data.offset, offset + 20);
+    assert_eq!(debug.entries[0].pointer_to_raw_data.offset, offset + 24);
     assert_eq!(
         debug.entries[0].raw_data(&buffer).unwrap(),
         b"RSDS\x00\x00\x00\x00"
@@ -1457,8 +1461,8 @@ fn test_pe_insert_section_header_grow_rebases_security_directory() {
     let security = &pe.optional_header.data_directories[SECURITY];
     assert_eq!(
         security.virtual_address.value,
-        old_cert_off + header_growth,
-        "SECURITY directory must be rebased by header padding bytes"
+        old_cert_off + header_growth + pe.sections.last().unwrap().size_of_raw_data.value,
+        "SECURITY directory must move past header padding and the inserted raw section"
     );
 
     let table = pe
