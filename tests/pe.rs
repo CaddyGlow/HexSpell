@@ -15,6 +15,60 @@ use toml::Value;
 use hexspell::errors::FileParseError;
 use hexspell::pe; // <-- Testing module
 
+#[test]
+fn test_load_config_amd64_cookie_layout_and_patch() {
+    use pe::header::PEType;
+    use pe::load_config::LoadConfigDirectory;
+
+    let offset = 16;
+    let edit_list = 0x1122_3344_5566_7788u64;
+    let cookie = 0x99aa_bbcc_ddee_ff00u64;
+    for size in [96u32, 112, 320] {
+        let mut buffer = vec![0; offset + size as usize];
+        buffer[offset..offset + 4].copy_from_slice(&size.to_le_bytes());
+        buffer[offset + 80..offset + 88].copy_from_slice(&edit_list.to_le_bytes());
+        buffer[offset + 88..offset + 96].copy_from_slice(&cookie.to_le_bytes());
+        let mut config = LoadConfigDirectory::parse(&buffer, offset, PEType::PE32Plus).unwrap();
+        assert_eq!(config.security_cookie.value, cookie);
+        assert_eq!(config.security_cookie.offset, offset + 88);
+        assert_eq!(config.security_cookie.size, 8);
+        config.security_cookie.update(&mut buffer, 0x1234).unwrap();
+        assert_eq!(&buffer[offset + 80..offset + 88], &edit_list.to_le_bytes());
+        let reparsed = LoadConfigDirectory::parse(&buffer, offset, PEType::PE32Plus).unwrap();
+        assert_eq!(reparsed.security_cookie.value, 0x1234);
+    }
+}
+
+#[test]
+fn test_load_config_amd64_extents() {
+    use pe::header::PEType;
+    use pe::load_config::LoadConfigDirectory;
+
+    // Trailing file bytes must not make an older, shorter structure valid.
+    for size in [0u32, 63, 64, 80, 88, 92, 95] {
+        let mut buffer = vec![0; 128];
+        buffer[..4].copy_from_slice(&size.to_le_bytes());
+        assert!(matches!(
+            LoadConfigDirectory::parse(&buffer, 0, PEType::PE32Plus),
+            Err(FileParseError::InvalidFileFormat)
+        ));
+    }
+    for size in [96u32, 112, 320] {
+        for available in 4..size as usize {
+            let mut buffer = vec![0; available];
+            buffer[..4].copy_from_slice(&size.to_le_bytes());
+            assert!(matches!(
+                LoadConfigDirectory::parse(&buffer, 0, PEType::PE32Plus),
+                Err(FileParseError::BufferOverflow)
+            ));
+        }
+    }
+    assert!(matches!(
+        LoadConfigDirectory::parse(&[0; 4], usize::MAX, PEType::PE32Plus),
+        Err(FileParseError::BufferOverflow)
+    ));
+}
+
 /// ========================================
 /// Testing reading and parsing in a PE file
 /// ========================================

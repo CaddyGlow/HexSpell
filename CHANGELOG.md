@@ -22,8 +22,20 @@
 
 ## [Unreleased]
 
+
+## [1.1.2] - 2026-10-10
+
 - **PE**
-    - *Fixed*: Return `BufferOverflow` for overflowing TLS directory offsets in both PE32 and PE32+ layouts instead of panicking.
+    - *Fixed*: Read the PE32+ load configuration security cookie at byte 88 after the eight-byte EditList; reject declared structures shorter than the cookie and check extent arithmetic.
+    - *Fixed*: Reject overflowing TLS directory offsets for both PE32 and PE32+ instead of panicking.
+
+
+## [1.1.1] - 2026-10-08
+
+- **PE**
+    - *Fixed*: Bound certificate headers, payloads and aligned record steps by the declared security directory; reject inconsistent empty directories and overflowing offsets.
+- **General**
+    - *Documentation*: Point crate metadata at the maintained CaddyGlow fork and caddy-hexspell documentation.
 
 
 ## [1.0.0] - 2026-07-07
