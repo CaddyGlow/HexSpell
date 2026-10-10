@@ -26,7 +26,7 @@ impl TlsDirectory {
     pub fn parse(buffer: &[u8], offset: usize, pe_type: PEType) -> Result<Self, FileParseError> {
         match pe_type {
             PEType::PE32 => {
-                if buffer.len() < offset + 24 {
+                if offset.checked_add(24).is_none_or(|end| end > buffer.len()) {
                     return Err(FileParseError::BufferOverflow);
                 }
                 Ok(TlsDirectory {
@@ -59,7 +59,7 @@ impl TlsDirectory {
                 })
             }
             PEType::PE32Plus => {
-                if buffer.len() < offset + 40 {
+                if offset.checked_add(40).is_none_or(|end| end > buffer.len()) {
                     return Err(FileParseError::BufferOverflow);
                 }
                 Ok(TlsDirectory {

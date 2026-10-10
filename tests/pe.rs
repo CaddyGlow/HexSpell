@@ -1416,3 +1416,93 @@ fn test_pe_insert_section_header_grow_rebases_security_directory() {
         CERT_PAYLOAD
     );
 }
+
+#[test]
+fn test_pe_tls_directory_rejects_overflowing_offsets() {
+    use hexspell::pe::{header::PEType, tls::TlsDirectory};
+    for pe_type in [PEType::PE32, PEType::PE32Plus] {
+        for offset in [usize::MAX, usize::MAX - 1, usize::MAX - 23] {
+            assert!(matches!(
+                TlsDirectory::parse(&[0; 64], offset, pe_type),
+                Err(FileParseError::BufferOverflow)
+            ));
+        }
+    }
+}
+
+#[test]
+fn test_pe_tls_directory_rejects_every_truncation() {
+    use hexspell::pe::{header::PEType, tls::TlsDirectory};
+    for (pe_type, size) in [(PEType::PE32, 24), (PEType::PE32Plus, 40)] {
+        let offset = 7;
+        let bytes = vec![0; offset + size];
+        for end in 0..bytes.len() {
+            assert!(matches!(
+                TlsDirectory::parse(&bytes[..end], offset, pe_type),
+                Err(FileParseError::BufferOverflow)
+            ));
+        }
+        assert!(TlsDirectory::parse(&bytes, offset, pe_type).is_ok());
+        assert!(TlsDirectory::parse(&bytes, bytes.len(), pe_type).is_err());
+        assert!(TlsDirectory::parse(&bytes, bytes.len() + 1, pe_type).is_err());
+    }
+}
+
+#[test]
+fn test_pe_tls_directory_preserves_values_and_file_field_offsets() {
+    use hexspell::pe::{
+        header::{ImageBase, PEType},
+        tls::TlsDirectory,
+    };
+    for (pe_type, width) in [(PEType::PE32, 4), (PEType::PE32Plus, 8)] {
+        let offset = 7;
+        let mut bytes = vec![0xa5; offset + 4 * width + 8];
+        for i in 0..4 {
+            let value = if width == 8 {
+                0x1234_5678_0000_1000u64
+            } else {
+                0x1000
+            } + i as u64;
+            bytes[offset + i * width..offset + (i + 1) * width]
+                .copy_from_slice(&value.to_le_bytes()[..width]);
+        }
+        bytes[offset + 4 * width..offset + 4 * width + 4].copy_from_slice(&0x1234u32.to_le_bytes());
+        bytes[offset + 4 * width + 4..].copy_from_slice(&0x0050_0000u32.to_le_bytes());
+        let tls = TlsDirectory::parse(&bytes, offset, pe_type).unwrap();
+        for (i, field) in [
+            &tls.start_address_of_raw_data,
+            &tls.end_address_of_raw_data,
+            &tls.address_of_index,
+            &tls.address_of_callbacks,
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(field.offset, offset + i * width);
+            assert_eq!(field.size, width);
+            match (&field.value, width) {
+                (ImageBase::Base64(value), 8) => {
+                    assert_eq!(*value, 0x1234_5678_0000_1000 + i as u64)
+                }
+                (ImageBase::Base32(value), 4) => assert_eq!(*value, 0x1000 + i as u32),
+                _ => panic!("TLS address field has incorrect width"),
+            }
+        }
+        assert_eq!(
+            (
+                tls.size_of_zero_fill.value,
+                tls.size_of_zero_fill.offset,
+                tls.size_of_zero_fill.size
+            ),
+            (0x1234, offset + 4 * width, 4)
+        );
+        assert_eq!(
+            (
+                tls.characteristics.value,
+                tls.characteristics.offset,
+                tls.characteristics.size
+            ),
+            (0x0050_0000, offset + 4 * width + 4, 4)
+        );
+    }
+}
