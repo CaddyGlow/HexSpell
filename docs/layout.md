@@ -72,3 +72,19 @@ ELF64 stores `p_flags` before `p_offset`; the accessors hide the layout differen
 [`CoffFileHeader`]: crate::pe::coff::CoffFileHeader
 [`OptionalHeader`]: crate::pe::header::OptionalHeader
 [`PeSection`]: crate::pe::section::PeSection
+
+Buffer storage defaults to `Vec<u8>` for editing. Borrowed parsing uses `PE<&[u8]>`, `ELF<&[u8]>`, or `MachO<&[u8]>`; field offsets and sizes are identical to owned parsing of the same image.
+
+Header-only access uses `ElfHeaders::header` and `MachHeaders::header`, with the same `Field` offsets/sizes as full parsing. `ElfHeaders::program` / `section` and `MachHeaders::command` preserve file-relative field positions (thin-slice-relative for Mach-O).
+
+
+## Streaming field access
+
+PE `DllImportRef::descriptor`, `ImportEntryRef` thunk/hint fields,
+`NamedExportRef` name/ordinal/address slots, `FunctionExportRef::function_rva`,
+`RelocationBlockRef` headers/entries, and debug iterator records retain their
+original file offsets and sizes. Owned imports store descriptor fields once in
+`DllImport::descriptor`; `ImportDirectory::descriptors()` borrows those fields.
+Base relocations are parsed from the buffer on demand rather than cached on PE.
+ELF `ProgramHeaderEntry::parse_one` and `SectionHeaderEntry::parse_one`
+return the existing layout types without intermediate vector storage.

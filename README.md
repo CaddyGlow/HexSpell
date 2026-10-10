@@ -174,3 +174,14 @@ fn machine(bytes: &[u8]) -> Result<u16, hexspell::errors::FileParseError> {
 Validate both modes with `cargo test` and `cargo test --no-default-features`.
 `cargo check --no-default-features --target thumbv7em-none-eabi` checks a target
 without a standard library.
+
+Read-only parsing can borrow existing bytes with `PE::from_slice`, `ELF::from_slice`, and `MachO::from_slice`, avoiding a full file copy. Use owned `from_buffer` or `from_file` inputs for editing.
+
+For allocation-free header-only inspection, use `pe::view::PeHeaders`, `elf::view::ElfHeaders`, or `macho::view::MachHeaders` (thin Mach-O). Referenced tables are inspected on demand.
+
+
+Read-only directory inspection can stream PE imports, exports, base relocations,
+and debug records without collecting tables. ELF entry views and Mach-O command
+and FAT views avoid temporary allocations. Borrowed name accessors preserve owned
+editing support. Version 1.2.0 changes relocation and import-descriptor access;
+see [the migration guide](docs/guide.md#migrating-to-120).

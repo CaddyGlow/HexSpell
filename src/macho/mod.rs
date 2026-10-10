@@ -4,6 +4,7 @@
 //! Byte order is derived from the magic bytes at file offset 0 — there is no endianness field in
 //! the header.
 
+use alloc::borrow::Cow;
 use alloc::string::String;
 #[cfg(feature = "std")]
 use alloc::vec;
@@ -18,6 +19,7 @@ pub mod relocation;
 pub mod section;
 pub mod segment;
 pub mod symbol;
+pub mod view;
 
 use crate::errors;
 use crate::field::ByteOrder;
@@ -30,10 +32,10 @@ use section::{NewSection, SectionEntry};
 use segment::{NewSegment, SegmentEntry};
 use symbol::SymbolTable;
 
-/// A parsed Mach-O image backed by an owned byte buffer.
-pub struct MachO {
+/// A parsed Mach-O image backed by owned bytes (by default) or a borrowed slice.
+pub struct MachO<B = Vec<u8>> {
     /// Full file contents (thin Mach-O after FAT unpacking).
-    pub buffer: Vec<u8>,
+    pub buffer: B,
     /// Mach-O header (`mach_header` / `mach_header_64`).
     pub header: MachHeader,
     /// Load command headers (`cmd` + `cmdsize` only).
@@ -44,7 +46,7 @@ pub struct MachO {
     pub sections: Vec<SectionEntry>,
 }
 
-impl MachO {
+impl<B: core::ops::Deref<Target = [u8]>> MachO<B> {
     /// Byte order derived from the Mach-O header magic bytes on disk (no endianness byte exists).
     pub fn byte_order(&self) -> ByteOrder {
         let bytes: [u8; 4] = self.buffer[0..4].try_into().unwrap_or([0, 0, 0, 0]);
@@ -59,7 +61,9 @@ impl MachO {
         file.write_all(&self.buffer)?;
         Ok(())
     }
+}
 
+impl MachO {
     /// Reads and parses a Mach-O file from disk (FAT binaries are unpacked).
     #[cfg(feature = "std")]
     pub fn from_file(path: &str) -> Result<Self, errors::FileParseError> {
@@ -102,13 +106,8 @@ impl MachO {
         buffer: Vec<u8>,
         index: usize,
     ) -> Result<Self, errors::FileParseError> {
-        if let Some(fat) = fat::FatHeader::parse(&buffer)? {
-            let arch = fat
-                .arches
-                .get(index)
-                .ok_or(errors::FileParseError::BufferOverflow)?;
-            let inner = fat.slice_bytes(&buffer, arch)?;
-            return Self::from_buffer(inner);
+        if let Some(fat) = fat::FatHeaders::parse(&buffer)? {
+            return Self::from_buffer(fat.slice(index)?.to_vec());
         }
         if index != 0 {
             return Err(errors::FileParseError::BufferOverflow);
@@ -123,26 +122,37 @@ impl MachO {
         let mut file = std::fs::File::open(path)?;
         let mut header_buf = [0u8; 8];
         file.read_exact(&mut header_buf)?;
-        let magic_be = u32::from_be_bytes(header_buf[0..4].try_into().unwrap());
-        if magic_be != 0xCAFE_BABE && magic_be != 0xCAFEBABF {
+        let Some((order, wide, count)) = fat::layout(&header_buf)? else {
             if index != 0 {
                 return Err(errors::FileParseError::BufferOverflow);
             }
             let mut buffer = header_buf.to_vec();
             file.read_to_end(&mut buffer)?;
             return Self::from_buffer(buffer);
-        }
-
-        let fat = {
-            let mut buf = header_buf.to_vec();
-            file.read_to_end(&mut buf)?;
-            fat::FatHeader::parse(&buf)?.ok_or(errors::FileParseError::InvalidFileFormat)?
         };
-        let arch = fat
-            .arches
-            .get(index)
+        let stride: usize = if wide { 32 } else { 20 };
+        let table_end = count
+            .checked_mul(stride)
+            .and_then(|n| n.checked_add(8))
             .ok_or(errors::FileParseError::BufferOverflow)?;
+        let file_len = file.metadata()?.len();
+        if count == 0 || index >= count || table_end as u64 > file_len {
+            return Err(errors::FileParseError::BufferOverflow);
+        }
+        let selected = 8 + index * stride;
+        file.seek(SeekFrom::Start(selected as u64))?;
+        // Decode just the selected record with the same parser as in-memory selection.
+        let mut record = [0u8; 40];
+        record[..8].copy_from_slice(&header_buf);
+        order.write_u32(&mut record, 4, 1);
+        file.read_exact(&mut record[8..8 + stride])?;
+        let arch = fat::FatHeaders::parse(&record[..8 + stride])?
+            .ok_or(errors::FileParseError::InvalidFileFormat)?
+            .arch(0)?;
         let (start, end) = arch.byte_range()?;
+        if end as u64 > file_len {
+            return Err(errors::FileParseError::BufferOverflow);
+        }
         file.seek(SeekFrom::Start(start as u64))?;
         let mut inner = vec![0u8; end - start];
         file.read_exact(&mut inner)?;
@@ -151,75 +161,26 @@ impl MachO {
 
     /// Returns a borrowed view of one FAT slice inside `buffer` without copying.
     pub fn fat_slice_ref(buffer: &[u8], index: usize) -> Result<&[u8], errors::FileParseError> {
-        let fat =
-            fat::FatHeader::parse(buffer)?.ok_or(errors::FileParseError::InvalidFileFormat)?;
-        let arch = fat
-            .arches
-            .get(index)
-            .ok_or(errors::FileParseError::BufferOverflow)?;
-        fat.slice_ref(buffer, arch)
+        fat::FatHeaders::parse(buffer)?
+            .ok_or(errors::FileParseError::InvalidFileFormat)?
+            .slice(index)
     }
 
     /// Parses a Mach-O image from an owned byte buffer.
     pub fn from_buffer(buffer: Vec<u8>) -> Result<Self, errors::FileParseError> {
-        if buffer.len() < 4 {
-            return Err(errors::FileParseError::BufferOverflow);
+        let mut buffer = buffer;
+        while let Some(fat) = fat::FatHeaders::parse(&buffer)? {
+            let inner = fat.slice(0)?;
+            if inner.len() >= buffer.len() {
+                return Err(errors::FileParseError::InvalidFileFormat);
+            }
+            buffer = inner.to_vec();
         }
-
-        let magic_bytes: [u8; 4] = buffer
-            .get(0..4)
-            .ok_or(errors::FileParseError::BufferOverflow)?
-            .try_into()
-            .map_err(|_| errors::FileParseError::BufferOverflow)?;
-
-        let magic_le = u32::from_le_bytes(magic_bytes);
-
-        if let Some(fat) = fat::FatHeader::parse(&buffer)? {
-            let arch = fat
-                .arches
-                .first()
-                .ok_or(errors::FileParseError::InvalidFileFormat)?;
-            let inner = fat.slice_bytes(&buffer, arch)?;
-            return MachO::from_buffer(inner);
-        }
-
-        let (header_size, byte_order, is_64bit) = match magic_le {
-            0xFEEDFACE => (28, ByteOrder::Little, false),
-            0xFEEDFACF => (32, ByteOrder::Little, true),
-            0xCEFAEDFE => (28, ByteOrder::Big, false),
-            0xCFFAEDFE => (32, ByteOrder::Big, true),
-            _ => return Err(errors::FileParseError::InvalidFileFormat),
-        };
-
-        if buffer.len() < header_size {
-            return Err(errors::FileParseError::BufferOverflow);
-        }
-
-        let header = MachHeader::parse(&buffer, byte_order, is_64bit)?;
-        let load_commands_offset = header_size;
-
-        if buffer.len() < load_commands_offset + header.sizeofcmds.value as usize {
-            return Err(errors::FileParseError::BufferOverflow);
-        }
-
-        let load_commands = LoadCommand::parse_load_commands(
-            &buffer,
-            load_commands_offset,
-            header.ncmds.value,
-            byte_order,
-        )?;
-        let segments = SegmentEntry::parse_segments(&buffer, &load_commands, byte_order)?;
-        let sections = SectionEntry::parse_sections(&buffer, &load_commands, byte_order)?;
-
-        Ok(MachO {
-            buffer,
-            header,
-            load_commands,
-            segments,
-            sections,
-        })
+        Self::parse_buffer(buffer)
     }
+}
 
+impl<B: core::ops::Deref<Target = [u8]>> MachO<B> {
     /// Iterates the typed payloads of the load commands HexSpell models.
     ///
     /// Commands without a typed view (segments, thread state, version) are skipped.
@@ -256,22 +217,20 @@ impl MachO {
     /// Returns the paths of the dynamic libraries the image links against (`LC_LOAD_DYLIB` and
     /// its weak / re-export / lazy variants). The dylib's own `LC_ID_DYLIB` is not included.
     pub fn linked_dylibs(&self) -> Result<Vec<String>, errors::FileParseError> {
-        use load_command::{
-            LC_LAZY_LOAD_DYLIB, LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB,
-        };
+        self.linked_dylibs_iter()
+            .map(|name| name.map(Cow::into_owned))
+            .collect()
+    }
+
+    /// Streams linked dylib paths, borrowing valid UTF-8 and skipping the dylib's own ID.
+    pub fn linked_dylibs_iter(
+        &self,
+    ) -> impl Iterator<Item = Result<Cow<'_, str>, errors::FileParseError>> + '_ {
         let order = self.byte_order();
-        let mut out = Vec::new();
-        for cmd in &self.load_commands {
-            if matches!(
-                cmd.cmd.value,
-                LC_LOAD_DYLIB | LC_LOAD_WEAK_DYLIB | LC_REEXPORT_DYLIB | LC_LAZY_LOAD_DYLIB
-            ) {
-                if let Some(TypedCommand::Dylib(dylib)) = cmd.typed(&self.buffer, order)? {
-                    out.push(dylib.name);
-                }
-            }
-        }
-        Ok(out)
+        self.load_commands
+            .iter()
+            .filter(|cmd| cmd.cmd.value != load_command::LC_ID_DYLIB)
+            .filter_map(move |cmd| cmd.dylib_name_ref(&self.buffer, order).transpose())
     }
 
     /// Parses relocation entries for every section that has `nreloc > 0`.
@@ -344,7 +303,9 @@ impl MachO {
     pub fn llvm_sections(&self) -> Vec<&SectionEntry> {
         bitcode::llvm_sections(&self.segments, &self.sections)
     }
+}
 
+impl MachO {
     /// Inserts raw load-command bytes at `index` (0 = first command after the Mach-O header).
     pub fn insert_load_command_at(
         &mut self,
@@ -448,7 +409,9 @@ impl MachO {
         self.preserve_code_signature_alignment()?;
         self.reparse()
     }
+}
 
+impl<B: core::ops::Deref<Target = [u8]>> MachO<B> {
     fn export_trie_blob(&self) -> Result<Option<&[u8]>, errors::FileParseError> {
         let order = self.byte_order();
         for cmd in &self.load_commands {
@@ -466,7 +429,9 @@ impl MachO {
         }
         Ok(None)
     }
+}
 
+impl MachO {
     fn load_command_offset(&self, index: usize) -> Result<usize, errors::FileParseError> {
         self.load_commands
             .get(index)
@@ -608,11 +573,15 @@ impl MachO {
             28
         }
     }
+}
 
+impl<B: core::ops::Deref<Target = [u8]>> MachO<B> {
     fn is_64bit(&self) -> bool {
         self.header.reserved.is_some()
     }
+}
 
+impl MachO {
     fn reparse(&mut self) -> Result<(), errors::FileParseError> {
         let buf = core::mem::take(&mut self.buffer);
         *self = Self::from_buffer(buf)?;
@@ -686,6 +655,80 @@ impl MachO {
         order.write_u32(&mut self.buffer, 20, new_sizeofcmds);
 
         self.reparse()
+    }
+    /// Parses borrowed bytes without copying the file buffer.
+    ///
+    /// Headers and tables are still allocated. Use `from_buffer` for editing.
+    ///
+    /// Borrowed buffers cannot be patched:
+    /// ```compile_fail
+    /// use hexspell::macho::MachO;
+    /// let mut image = MachO::from_slice(&[]).unwrap();
+    /// image.header.ncmds.update(&mut image.buffer, 0).unwrap();
+    /// ```
+    pub fn from_slice(buffer: &[u8]) -> Result<MachO<&[u8]>, errors::FileParseError> {
+        let mut buffer = buffer;
+        while let Some(fat) = fat::FatHeaders::parse(buffer)? {
+            let inner = fat.slice(0)?;
+            if inner.len() >= buffer.len() {
+                return Err(errors::FileParseError::InvalidFileFormat);
+            }
+            buffer = inner;
+        }
+        MachO::parse_buffer(buffer)
+    }
+}
+
+impl<B: core::ops::Deref<Target = [u8]>> MachO<B> {
+    fn parse_buffer(buffer: B) -> Result<Self, errors::FileParseError> {
+        if buffer.len() < 4 {
+            return Err(errors::FileParseError::BufferOverflow);
+        }
+
+        let magic_bytes: [u8; 4] = buffer
+            .get(0..4)
+            .ok_or(errors::FileParseError::BufferOverflow)?
+            .try_into()
+            .map_err(|_| errors::FileParseError::BufferOverflow)?;
+
+        let magic_le = u32::from_le_bytes(magic_bytes);
+
+        let (header_size, byte_order, is_64bit) = match magic_le {
+            0xFEEDFACE => (28, ByteOrder::Little, false),
+            0xFEEDFACF => (32, ByteOrder::Little, true),
+            0xCEFAEDFE => (28, ByteOrder::Big, false),
+            0xCFFAEDFE => (32, ByteOrder::Big, true),
+            _ => return Err(errors::FileParseError::InvalidFileFormat),
+        };
+
+        if buffer.len() < header_size {
+            return Err(errors::FileParseError::BufferOverflow);
+        }
+
+        let header = MachHeader::parse(&buffer, byte_order, is_64bit)?;
+        let load_commands_offset = header_size;
+
+        if buffer.len() < load_commands_offset + header.sizeofcmds.value as usize {
+            return Err(errors::FileParseError::BufferOverflow);
+        }
+
+        let load_commands = LoadCommand::parse_load_commands(
+            &buffer,
+            load_commands_offset,
+            header.ncmds.value,
+            header.sizeofcmds.value,
+            byte_order,
+        )?;
+        let segments = SegmentEntry::parse_segments(&buffer, &load_commands, byte_order)?;
+        let sections = SectionEntry::parse_sections(&buffer, &load_commands, byte_order)?;
+
+        Ok(MachO {
+            buffer,
+            header,
+            load_commands,
+            segments,
+            sections,
+        })
     }
 }
 

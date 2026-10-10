@@ -178,3 +178,130 @@ Some edge cases remain partial (for example PE `remove_section` without full ent
 [`PE::tls`]: crate::pe::PE::tls
 [`PE::coff_symbols`]: crate::pe::PE::coff_symbols
 [`PE::apply_image_base`]: crate::pe::PE::apply_image_base
+
+
+## Borrowed parsing
+
+Use `PE::from_slice(&bytes)`, `ELF::from_slice(&bytes)`, or
+`MachO::from_slice(&bytes)` to inspect existing bytes without copying the file
+buffer. These return `PE<&[u8]>`, `ELF<&[u8]>`, and `MachO<&[u8]>`;
+headers and tables still allocate as before, and lazy parsers remain available.
+The input must outlive the parsed image. FAT Mach-O input selects the first
+architecture as a borrowed thin slice; field offsets are relative to that slice.
+To select another architecture, pass `MachO::fat_slice_ref(&bytes, index)?`
+to `MachO::from_slice`.
+
+For editing, keep using `from_buffer(Vec<u8>)` or `from_file`. These retain
+owned buffers and editing methods. To edit borrowed input, explicitly copy it
+and parse the owned bytes:
+
+```rust
+# use hexspell::pe::PE;
+# let bytes = include_bytes!("../tests/samples/sample1.exe");
+let view = PE::from_slice(bytes)?;
+let mut editable = PE::from_buffer(view.buffer.to_vec())?;
+editable.coff_header.time_date_stamp.update(&mut editable.buffer, 0)?;
+# Ok::<(), hexspell::errors::FileParseError>(())
+```
+
+
+## Header-only inspection
+
+Use `elf::view::ElfHeaders::parse(&bytes)` or
+`macho::view::MachHeaders::parse(&bytes)` when only the file header is needed.
+Like `pe::view::PeHeaders`, these borrow the input and allocate nothing during
+initial parsing. They accept complete headers even when referenced tables or
+payloads are missing; successful header parsing does not validate the full file.
+
+`ElfHeaders::program(index)` and `section(index)` parse one table entry on
+demand without allocating. `program_count()` and
+`section_count()` resolve extended counts through section zero when necessary.
+`MachHeaders::command(index)` walks command sizes to read a load-command header
+without allocation or payload parsing. Entry access checks file bounds and
+retains the original field offsets and sizes.
+
+Mach-O header views require thin input. For FAT files, select an architecture
+with `MachO::fat_slice_ref(&bytes, index)?` before parsing the view; field offsets
+are relative to that selected slice. FAT selection and thin header views do not
+allocate.
+Owned parsing and editing continue to use `from_buffer` or `from_file`.
+
+
+## Streaming directory inspection
+
+PE directory iterators inspect entries without collecting tables:
+
+```rust
+# use hexspell::pe::{PE, read::ImportEntryRef};
+# let bytes = include_bytes!("../tests/samples/sample1.exe");
+let pe = PE::from_slice(bytes)?;
+for dll in pe.imports_iter()? {
+    let dll = dll?;
+    for entry in dll.entries {
+        if let ImportEntryRef::ByName { name, .. } = entry? {
+            println!("{}: {name}", dll.dll_name);
+        }
+    }
+}
+# Ok::<(), hexspell::errors::FileParseError>(())
+```
+
+- `imports_iter()` yields each descriptor once, a borrowed DLL name, and a thunk
+  iterator. Names use `Cow<str>`: valid UTF-8 borrows the input; invalid UTF-8
+  allocates its lossy decoding, matching `imports()`.
+- `exports_iter()` yields named exports; `export_functions_iter()` yields every
+  address-table slot, including ordinal-only entries and borrowed forwarders.
+  Export strings retain strict UTF-8 validation.
+- `base_relocations_iter()` yields borrowed blocks. Each block's `entries()`
+  decodes relocation words without allocation. `to_owned()` explicitly collects
+  one block.
+- `debug_iter()` yields fixed-size debug records.
+
+These iterators retain original `Field` offsets and sizes. PE directory iterators
+and Mach-O command iterators return an error once and then stop. Fully traverse
+them to validate every entry; stopping early validates only the visited portion.
+Iterator construction may validate fixed table extents, but does not decode
+unvisited names or payloads.
+
+For repeated PE RVA lookup, `let index = pe.rva_index();` builds an optional index.
+Use `index.rva_to_offset(rva)`, or pass `&index` to an import/export iterator's
+`with_index` method. An index borrows the image so edits cannot invalidate it.
+Overlapping section ranges use the original file-order lookup. Index construction
+allocates; small section tables can be faster with the default linear mapper.
+
+For ELF, `section_name_ref(index)` and `SymbolTable::name_ref(buffer, symbol)`
+borrow valid UTF-8 names. For Mach-O, `MachHeaders::commands()` traverses all
+command headers in O(n) without allocation, while repeated `command(index)`
+calls rescan the prefix. `MachO::linked_dylibs_iter()` and
+`LoadCommand::dylib_name_ref` borrow dylib paths. `FatHeaders::parse` and
+`arch(index)` read FAT metadata without collecting an architecture vector.
+
+Shared `strings::read_c_bytes`, `read_c_string_ref`,
+`read_c_string_in_pool_ref`, and `CStringPool::resolve_ref` support borrowed
+string inspection. Existing owned string helpers remain available.
+
+## Migrating to 1.2.0
+
+This release includes the following breaking API changes:
+
+| Previous API | Replacement |
+|---|---|
+| `pe.base_relocations` field | `pe.base_relocations()?` to collect, or `pe.base_relocations_iter()?` to stream |
+| `imports.descriptors` field | `imports.descriptors()` to borrow descriptors, or `imports.dlls[i].descriptor` |
+
+PE parsing now validates headers and sections without reading the relocation
+directory. Malformed relocation errors are reported on directory access or
+`apply_image_base`. Relocation access reads current buffer bytes every time,
+without a cache. `apply_image_base` still parses and applies relocations before
+updating the preferred image base. To alter relocation fields, patch the buffer
+through their `Field` values; there is no mutable cached relocation list.
+
+Full parsers validate table extents and minimum entry sizes before reserving
+capacity. Malformed ELF entry strides and Mach-O command/segment extents that
+were previously accepted may now return errors.
+
+Run `cargo bench --bench parsing` for dependency-free release measurements of
+owned versus streaming directory inspection, names, command traversal, FAT
+selection, and linear versus indexed RVA lookup. File I/O and setup are outside
+timing; allocation counts include calls to allocate or reallocate, and byte counts
+are total requested bytes rather than peak live memory.

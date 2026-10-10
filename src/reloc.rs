@@ -46,10 +46,14 @@ pub struct ElfRelocHit {
 }
 
 /// Lists PE base relocations whose patched RVA equals `rva`.
-pub fn pe_base_relocs_at_rva(pe: &PE, rva: u32) -> Result<Vec<PeBaseRelocHit>, FileParseError> {
+pub fn pe_base_relocs_at_rva<B: core::ops::Deref<Target = [u8]>>(
+    pe: &PE<B>,
+    rva: u32,
+) -> Result<Vec<PeBaseRelocHit>, FileParseError> {
     let mut hits = Vec::new();
-    for block in &pe.base_relocations {
-        for entry in &block.entries {
+    for block in pe.base_relocations_iter()? {
+        let block = block?;
+        for entry in block.entries() {
             let entry_rva = entry.rva(block.page_rva.value);
             if entry_rva == rva {
                 hits.push(PeBaseRelocHit {
@@ -66,11 +70,14 @@ pub fn pe_base_relocs_at_rva(pe: &PE, rva: u32) -> Result<Vec<PeBaseRelocHit>, F
     Ok(hits)
 }
 
-/// Lists every PE base relocation entry (eager directory already parsed on [`PE`]).
-pub fn pe_base_relocs(pe: &PE) -> Result<Vec<PeBaseRelocHit>, FileParseError> {
+/// Lists every PE base relocation entry from the current buffer.
+pub fn pe_base_relocs<B: core::ops::Deref<Target = [u8]>>(
+    pe: &PE<B>,
+) -> Result<Vec<PeBaseRelocHit>, FileParseError> {
     let mut hits = Vec::new();
-    for block in &pe.base_relocations {
-        for entry in &block.entries {
+    for block in pe.base_relocations_iter()? {
+        let block = block?;
+        for entry in block.entries() {
             let rva = entry.rva(block.page_rva.value);
             let file_offset = pe.rva_to_offset(rva)?;
             hits.push(PeBaseRelocHit {
@@ -87,8 +94,8 @@ pub fn pe_base_relocs(pe: &PE) -> Result<Vec<PeBaseRelocHit>, FileParseError> {
 }
 
 /// Lists PE COFF section relocations at `rva` across all sections.
-pub fn pe_section_relocs_at_rva(
-    pe: &PE,
+pub fn pe_section_relocs_at_rva<B: core::ops::Deref<Target = [u8]>>(
+    pe: &PE<B>,
     rva: u32,
 ) -> Result<Vec<PeSectionRelocHit>, FileParseError> {
     let mut hits = Vec::new();
@@ -109,13 +116,14 @@ pub fn pe_section_relocs_at_rva(
 }
 
 /// Lists PE base relocations whose patched slot maps to `file_offset`.
-pub fn pe_relocs_at_file_offset(
-    pe: &PE,
+pub fn pe_relocs_at_file_offset<B: core::ops::Deref<Target = [u8]>>(
+    pe: &PE<B>,
     file_offset: usize,
 ) -> Result<Vec<PeBaseRelocHit>, FileParseError> {
     let mut hits = Vec::new();
-    for block in &pe.base_relocations {
-        for entry in &block.entries {
+    for block in pe.base_relocations_iter()? {
+        let block = block?;
+        for entry in block.entries() {
             let rva = entry.rva(block.page_rva.value);
             let off = pe.rva_to_offset(rva)?;
             if off == file_offset {
@@ -134,7 +142,10 @@ pub fn pe_relocs_at_file_offset(
 }
 
 /// Lists ELF relocations whose `r_offset` equals `va`.
-pub fn elf_relocs_at_va(elf: &ELF, va: u64) -> Result<Vec<ElfRelocHit>, FileParseError> {
+pub fn elf_relocs_at_va<B: core::ops::Deref<Target = [u8]>>(
+    elf: &ELF<B>,
+    va: u64,
+) -> Result<Vec<ElfRelocHit>, FileParseError> {
     let mut hits = Vec::new();
     for (section_index, entries) in elf.relocations()? {
         for entry in entries {
@@ -150,8 +161,8 @@ pub fn elf_relocs_at_va(elf: &ELF, va: u64) -> Result<Vec<ElfRelocHit>, FilePars
 }
 
 /// Lists ELF relocations whose `r_offset` maps to `file_offset` via [`crate::validation::elf_va_to_file_offset`].
-pub fn elf_relocs_at_file_offset(
-    elf: &ELF,
+pub fn elf_relocs_at_file_offset<B: core::ops::Deref<Target = [u8]>>(
+    elf: &ELF<B>,
     file_offset: usize,
 ) -> Result<Vec<ElfRelocHit>, FileParseError> {
     let mut hits = Vec::new();
@@ -169,16 +180,9 @@ pub fn elf_relocs_at_file_offset(
     Ok(hits)
 }
 
-/// Re-parses the PE base relocation directory from the image (lazy alternative to [`PE::base_relocations`]).
-pub fn pe_parse_base_relocations(pe: &PE) -> Result<Vec<BaseRelocationBlock>, FileParseError> {
-    use crate::pe::header::BASERELOC;
-    if !pe.optional_header.has_data_directory(BASERELOC) {
-        return Ok(Vec::new());
-    }
-    let directory = &pe.optional_header.data_directories[BASERELOC];
-    if directory.virtual_address.value == 0 || directory.size.value == 0 {
-        return Ok(Vec::new());
-    }
-    let offset = pe.rva_to_offset(directory.virtual_address.value)?;
-    crate::pe::relocation::parse_base_relocations(&pe.buffer, offset, directory.size.value as usize)
+/// Parses PE base relocations on demand from the current image.
+pub fn pe_parse_base_relocations<B: core::ops::Deref<Target = [u8]>>(
+    pe: &PE<B>,
+) -> Result<Vec<BaseRelocationBlock>, FileParseError> {
+    pe.base_relocations()
 }

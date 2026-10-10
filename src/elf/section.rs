@@ -292,6 +292,123 @@ impl SectionHeaderEntry {
         }
     }
 
+    /// Parses one section header without allocating; offsets remain file-relative.
+    pub fn parse_one(
+        buffer: &[u8],
+        base: usize,
+        class: ElfClass,
+        order: ByteOrder,
+    ) -> Result<Self, errors::FileParseError> {
+        let minimum = match class {
+            ElfClass::Elf32 => 40,
+            ElfClass::Elf64 => 64,
+        };
+        let end = base
+            .checked_add(minimum)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        buffer
+            .get(base..end)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        Ok(match class {
+            ElfClass::Elf32 => SectionHeaderEntry::Shdr32(Shdr32Fields {
+                sh_name: Field::new(order.read_u32_slice(&buffer[base..base + 4])?, base, 4),
+                sh_type: Field::new(
+                    order.read_u32_slice(&buffer[base + 4..base + 8])?,
+                    base + 4,
+                    4,
+                ),
+                sh_flags: Field::new(
+                    order.read_u32_slice(&buffer[base + 8..base + 12])?,
+                    base + 8,
+                    4,
+                ),
+                sh_addr: Field::new(
+                    order.read_u32_slice(&buffer[base + 12..base + 16])?,
+                    base + 12,
+                    4,
+                ),
+                sh_offset: Field::new(
+                    order.read_u32_slice(&buffer[base + 16..base + 20])?,
+                    base + 16,
+                    4,
+                ),
+                sh_size: Field::new(
+                    order.read_u32_slice(&buffer[base + 20..base + 24])?,
+                    base + 20,
+                    4,
+                ),
+                sh_link: Field::new(
+                    order.read_u32_slice(&buffer[base + 24..base + 28])?,
+                    base + 24,
+                    4,
+                ),
+                sh_info: Field::new(
+                    order.read_u32_slice(&buffer[base + 28..base + 32])?,
+                    base + 28,
+                    4,
+                ),
+                sh_addralign: Field::new(
+                    order.read_u32_slice(&buffer[base + 32..base + 36])?,
+                    base + 32,
+                    4,
+                ),
+                sh_entsize: Field::new(
+                    order.read_u32_slice(&buffer[base + 36..base + 40])?,
+                    base + 36,
+                    4,
+                ),
+            }),
+            ElfClass::Elf64 => SectionHeaderEntry::Shdr64(Shdr64Fields {
+                sh_name: Field::new(order.read_u32_slice(&buffer[base..base + 4])?, base, 4),
+                sh_type: Field::new(
+                    order.read_u32_slice(&buffer[base + 4..base + 8])?,
+                    base + 4,
+                    4,
+                ),
+                sh_flags: Field::new(
+                    order.read_u64_slice(&buffer[base + 8..base + 16])?,
+                    base + 8,
+                    8,
+                ),
+                sh_addr: Field::new(
+                    order.read_u64_slice(&buffer[base + 16..base + 24])?,
+                    base + 16,
+                    8,
+                ),
+                sh_offset: Field::new(
+                    order.read_u64_slice(&buffer[base + 24..base + 32])?,
+                    base + 24,
+                    8,
+                ),
+                sh_size: Field::new(
+                    order.read_u64_slice(&buffer[base + 32..base + 40])?,
+                    base + 32,
+                    8,
+                ),
+                sh_link: Field::new(
+                    order.read_u32_slice(&buffer[base + 40..base + 44])?,
+                    base + 40,
+                    4,
+                ),
+                sh_info: Field::new(
+                    order.read_u32_slice(&buffer[base + 44..base + 48])?,
+                    base + 44,
+                    4,
+                ),
+                sh_addralign: Field::new(
+                    order.read_u64_slice(&buffer[base + 48..base + 56])?,
+                    base + 48,
+                    8,
+                ),
+                sh_entsize: Field::new(
+                    order.read_u64_slice(&buffer[base + 56..base + 64])?,
+                    base + 56,
+                    8,
+                ),
+            }),
+        })
+    }
+
     pub(crate) fn parse_section_headers(
         buffer: &[u8],
         offset: u64,
@@ -299,118 +416,36 @@ impl SectionHeaderEntry {
         count: usize,
         class: ElfClass,
         order: ByteOrder,
-    ) -> Result<Vec<SectionHeaderEntry>, errors::FileParseError> {
-        let mut headers = Vec::new();
-        let start = offset as usize;
-
-        for i in 0..count {
-            let base = start + i * size as usize;
-            if buffer.len() < base + size as usize {
-                return Err(errors::FileParseError::BufferOverflow);
-            }
-
-            let header = match class {
-                ElfClass::Elf32 => SectionHeaderEntry::Shdr32(Shdr32Fields {
-                    sh_name: Field::new(order.read_u32_slice(&buffer[base..base + 4])?, base, 4),
-                    sh_type: Field::new(
-                        order.read_u32_slice(&buffer[base + 4..base + 8])?,
-                        base + 4,
-                        4,
-                    ),
-                    sh_flags: Field::new(
-                        order.read_u32_slice(&buffer[base + 8..base + 12])?,
-                        base + 8,
-                        4,
-                    ),
-                    sh_addr: Field::new(
-                        order.read_u32_slice(&buffer[base + 12..base + 16])?,
-                        base + 12,
-                        4,
-                    ),
-                    sh_offset: Field::new(
-                        order.read_u32_slice(&buffer[base + 16..base + 20])?,
-                        base + 16,
-                        4,
-                    ),
-                    sh_size: Field::new(
-                        order.read_u32_slice(&buffer[base + 20..base + 24])?,
-                        base + 20,
-                        4,
-                    ),
-                    sh_link: Field::new(
-                        order.read_u32_slice(&buffer[base + 24..base + 28])?,
-                        base + 24,
-                        4,
-                    ),
-                    sh_info: Field::new(
-                        order.read_u32_slice(&buffer[base + 28..base + 32])?,
-                        base + 28,
-                        4,
-                    ),
-                    sh_addralign: Field::new(
-                        order.read_u32_slice(&buffer[base + 32..base + 36])?,
-                        base + 32,
-                        4,
-                    ),
-                    sh_entsize: Field::new(
-                        order.read_u32_slice(&buffer[base + 36..base + 40])?,
-                        base + 36,
-                        4,
-                    ),
-                }),
-                ElfClass::Elf64 => SectionHeaderEntry::Shdr64(Shdr64Fields {
-                    sh_name: Field::new(order.read_u32_slice(&buffer[base..base + 4])?, base, 4),
-                    sh_type: Field::new(
-                        order.read_u32_slice(&buffer[base + 4..base + 8])?,
-                        base + 4,
-                        4,
-                    ),
-                    sh_flags: Field::new(
-                        order.read_u64_slice(&buffer[base + 8..base + 16])?,
-                        base + 8,
-                        8,
-                    ),
-                    sh_addr: Field::new(
-                        order.read_u64_slice(&buffer[base + 16..base + 24])?,
-                        base + 16,
-                        8,
-                    ),
-                    sh_offset: Field::new(
-                        order.read_u64_slice(&buffer[base + 24..base + 32])?,
-                        base + 24,
-                        8,
-                    ),
-                    sh_size: Field::new(
-                        order.read_u64_slice(&buffer[base + 32..base + 40])?,
-                        base + 32,
-                        8,
-                    ),
-                    sh_link: Field::new(
-                        order.read_u32_slice(&buffer[base + 40..base + 44])?,
-                        base + 40,
-                        4,
-                    ),
-                    sh_info: Field::new(
-                        order.read_u32_slice(&buffer[base + 44..base + 48])?,
-                        base + 44,
-                        4,
-                    ),
-                    sh_addralign: Field::new(
-                        order.read_u64_slice(&buffer[base + 48..base + 56])?,
-                        base + 48,
-                        8,
-                    ),
-                    sh_entsize: Field::new(
-                        order.read_u64_slice(&buffer[base + 56..base + 64])?,
-                        base + 56,
-                        8,
-                    ),
-                }),
-            };
-
-            headers.push(header);
+    ) -> Result<Vec<Self>, errors::FileParseError> {
+        if count == 0 {
+            return Ok(Vec::new());
         }
-
+        let minimum = match class {
+            ElfClass::Elf32 => 40,
+            ElfClass::Elf64 => 64,
+        };
+        if usize::from(size) < minimum {
+            return Err(errors::FileParseError::InvalidFileFormat);
+        }
+        let start = usize::try_from(offset).map_err(|_| errors::FileParseError::BufferOverflow)?;
+        let length = count
+            .checked_mul(usize::from(size))
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        let end = start
+            .checked_add(length)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        buffer
+            .get(start..end)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        let mut headers = Vec::with_capacity(count);
+        for index in 0..count {
+            headers.push(Self::parse_one(
+                buffer,
+                start + index * usize::from(size),
+                class,
+                order,
+            )?);
+        }
         Ok(headers)
     }
 }

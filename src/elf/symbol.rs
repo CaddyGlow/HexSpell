@@ -202,8 +202,21 @@ pub struct SymbolTable {
 }
 
 impl SymbolTable {
+    /// Borrows the symbol name, allocating only for lossy UTF-8 decoding.
+    pub fn name_ref<'a>(
+        &self,
+        buffer: &'a [u8],
+        symbol: &SymbolEntry,
+    ) -> Result<alloc::borrow::Cow<'a, str>, FileParseError> {
+        let offset = self
+            .strtab_offset
+            .checked_add(symbol.st_name() as usize)
+            .ok_or(FileParseError::BufferOverflow)?;
+        crate::strings::read_c_string_ref(buffer, offset)
+    }
+
     /// Resolves the name of `symbol` via the linked string table.
     pub fn name(&self, buffer: &[u8], symbol: &SymbolEntry) -> Result<String, FileParseError> {
-        super::read_str_at(buffer, self.strtab_offset + symbol.st_name() as usize)
+        Ok(self.name_ref(buffer, symbol)?.into_owned())
     }
 }

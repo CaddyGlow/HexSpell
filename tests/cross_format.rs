@@ -136,17 +136,9 @@ fn reloc_pe_base_relocs_sample2() {
 
 #[test]
 fn reloc_pe_base_relocs_surfaces_mapping_error() {
-    use hexspell::field::Field;
-    use pe::relocation::{BaseRelocationBlock, BaseRelocationEntry};
-
     let mut pe = pe::PE::from_file("tests/samples/sample2.dll").expect("sample2");
-    pe.base_relocations.push(BaseRelocationBlock {
-        page_rva: Field::new(0xFFFF_0000, 0, 4),
-        block_size: Field::new(12, 0, 4),
-        entries: vec![BaseRelocationEntry {
-            raw: Field::new(0x0000, 0, 2),
-        }],
-    });
+    let mut block = pe.base_relocations().unwrap().remove(0);
+    block.page_rva.update(&mut pe.buffer, 0xffff_0000).unwrap();
 
     assert!(reloc::pe_base_relocs(&pe).is_err());
 }
@@ -154,8 +146,9 @@ fn reloc_pe_base_relocs_surfaces_mapping_error() {
 #[test]
 fn reloc_pe_base_relocs_at_rva_sample2() {
     let pe = pe::PE::from_file("tests/samples/sample2.dll").expect("sample2");
-    assert!(!pe.base_relocations.is_empty());
-    let rva = pe.base_relocations[0].entries[0].rva(pe.base_relocations[0].page_rva.value);
+    assert!(!pe.base_relocations().unwrap().is_empty());
+    let rva = pe.base_relocations().unwrap()[0].entries[0]
+        .rva(pe.base_relocations().unwrap()[0].page_rva.value);
     let hits = reloc::pe_base_relocs_at_rva(&pe, rva).expect("hits");
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].rva, rva);
@@ -173,10 +166,19 @@ fn reloc_elf_at_va_linux() {
 }
 
 #[test]
-fn reloc_pe_lazy_parse_matches_eager() {
+fn reloc_pe_lazy_helper_matches_directory_parser() {
     let pe = pe::PE::from_file("tests/samples/sample64.exe").expect("pe64");
     let lazy = reloc::pe_parse_base_relocations(&pe).expect("lazy");
-    assert_eq!(lazy.len(), pe.base_relocations.len());
+    let entry = &pe.optional_header.data_directories[pe::header::BASERELOC];
+    let offset = pe.rva_to_offset(entry.virtual_address.value).unwrap();
+    let direct =
+        pe::relocation::parse_base_relocations(&pe.buffer, offset, entry.size.value as usize)
+            .unwrap();
+    assert_eq!(lazy.len(), direct.len());
+    for (lazy, direct) in lazy.iter().zip(&direct) {
+        assert_eq!(lazy.page_rva.value, direct.page_rva.value);
+        assert_eq!(lazy.entries.len(), direct.entries.len());
+    }
 }
 
 // --- Write planner ---
@@ -314,8 +316,8 @@ fn big_endian_elf_shdr_field_round_trip() {
     buffer[6] = 1;
     buffer[32..40].copy_from_slice(&64u64.to_be_bytes());
     buffer[40..48].copy_from_slice(&120u64.to_be_bytes());
-    buffer[58..60].copy_from_slice(&1u16.to_be_bytes());
-    buffer[60..62].copy_from_slice(&64u16.to_be_bytes());
+    buffer[58..60].copy_from_slice(&64u16.to_be_bytes());
+    buffer[60..62].copy_from_slice(&1u16.to_be_bytes());
 
     let sh = 120usize;
     buffer[sh..sh + 4].copy_from_slice(&1u32.to_be_bytes()); // .text name off
@@ -368,7 +370,7 @@ fn fixture_pe_combined_features() {
 
     let dll = pe::PE::from_file("tests/samples/sample2.dll").expect("sample2");
     assert!(dll.exports().unwrap().is_some());
-    assert!(!dll.base_relocations.is_empty());
+    assert!(!dll.base_relocations().unwrap().is_empty());
 }
 
 /// ELF ET_DYN with dynamic linking tables (tests/samples/linux).
@@ -401,4 +403,227 @@ fn fixture_macho_dyld() {
         .any(|c| matches!(c, macho::load_command::TypedCommand::Dylinker(_))));
     let dylibs = macho.linked_dylibs().expect("dylibs");
     assert!(dylibs.len() >= 2);
+}
+
+#[test]
+fn borrowed_parsers_reuse_input_and_match_owned_parsers() {
+    for path in ["tests/samples/sample1.exe", "tests/samples/sample64.exe"] {
+        let bytes = std::fs::read(path).unwrap();
+        let view = pe::PE::from_slice(&bytes).unwrap();
+        assert_eq!(view.buffer.as_ptr(), bytes.as_ptr());
+        let mut owned = pe::PE::from_buffer(bytes.clone()).unwrap();
+        assert_eq!(view.calc_checksum(), owned.calc_checksum());
+        assert_eq!(
+            view.imports().unwrap().descriptors().len(),
+            owned.imports().unwrap().descriptors().len()
+        );
+        assert_eq!(view.sections[0].name.offset, owned.sections[0].name.offset);
+        assert_eq!(
+            view.section_data(0).unwrap(),
+            owned.section_data(0).unwrap()
+        );
+        assert_eq!(
+            strings::pe_section_name(&view, 0).unwrap(),
+            strings::pe_section_name(&owned, 0).unwrap()
+        );
+        let value = owned.coff_header.time_date_stamp.value.wrapping_add(1);
+        owned
+            .coff_header
+            .time_date_stamp
+            .update(&mut owned.buffer, value)
+            .unwrap();
+        assert_ne!(
+            view.coff_header.time_date_stamp.value,
+            owned.coff_header.time_date_stamp.value
+        );
+        assert_eq!(view.buffer, bytes);
+    }
+    let bytes = std::fs::read("tests/samples/linux").unwrap();
+    let view = elf::ELF::from_slice(&bytes).unwrap();
+    let owned = elf::ELF::from_buffer(bytes.clone()).unwrap();
+    assert_eq!(view.buffer.as_ptr(), bytes.as_ptr());
+    assert_eq!(
+        view.section_name(1).unwrap(),
+        owned.section_name(1).unwrap()
+    );
+    assert_eq!(
+        view.section_data(1).unwrap(),
+        owned.section_data(1).unwrap()
+    );
+    assert_eq!(
+        view.symbols().unwrap().is_some(),
+        owned.symbols().unwrap().is_some()
+    );
+
+    let bytes = std::fs::read("tests/samples/machO-OSX-x86-ls").unwrap();
+    let view = macho::MachO::from_slice(&bytes).unwrap();
+    let owned = macho::MachO::from_buffer(bytes.clone()).unwrap();
+    assert_eq!(view.buffer.as_ptr(), bytes.as_ptr());
+    assert_eq!(
+        view.linked_dylibs().unwrap(),
+        owned.linked_dylibs().unwrap()
+    );
+    assert_eq!(view.header.ncmds.offset, owned.header.ncmds.offset);
+}
+
+#[test]
+fn borrowed_fat_parser_reuses_thin_slice_and_rejects_truncation() {
+    let bytes = build_fat_two_arch();
+    let thin = macho::MachO::fat_slice_ref(&bytes, 0).unwrap();
+    let view = macho::MachO::from_slice(&bytes).unwrap();
+    assert_eq!(view.buffer.as_ptr(), thin.as_ptr());
+    assert_eq!(view.buffer.len(), thin.len());
+    assert_eq!(view.header.magic.offset, 0);
+    for end in 0..4 {
+        assert!(pe::PE::from_slice(&bytes[..end]).is_err());
+        assert!(elf::ELF::from_slice(&bytes[..end]).is_err());
+        assert!(macho::MachO::from_slice(&bytes[..end]).is_err());
+    }
+}
+
+#[test]
+fn elf_header_view_defers_tables_and_preserves_offsets() {
+    use elf::view::ElfHeaders;
+    let bytes = std::fs::read("tests/samples/linux").unwrap();
+    let view = ElfHeaders::parse(&bytes).unwrap();
+    let full = elf::ELF::from_slice(&bytes).unwrap();
+    assert_eq!(view.bytes().as_ptr(), bytes.as_ptr());
+    assert_eq!(view.header.entry.value, full.header.entry.value);
+    for (index, expected) in full.program_headers.iter().enumerate() {
+        let entry = view.program(index).unwrap();
+        assert_eq!(entry.p_offset(), expected.p_offset());
+        assert_eq!(entry.p_vaddr(), expected.p_vaddr());
+    }
+    for (index, expected) in full.section_headers.iter().enumerate() {
+        assert_eq!(
+            view.section(index).unwrap().sh_offset(),
+            expected.sh_offset()
+        );
+    }
+    assert!(view.program(usize::MAX).is_err());
+    assert!(view.section(usize::MAX).is_err());
+    let header_size = view.header.eh_size.value as usize;
+    let partial = ElfHeaders::parse(&bytes[..header_size]).unwrap();
+    assert!(partial.program(0).is_err());
+    assert!(elf::ELF::from_slice(&bytes[..header_size]).is_err());
+    for end in 0..header_size {
+        assert!(ElfHeaders::parse(&bytes[..end]).is_err());
+    }
+}
+
+#[test]
+fn header_views_detect_word_size_and_byte_order_without_tables() {
+    use elf::view::ElfHeaders;
+    use macho::view::MachHeaders;
+    for big in [false, true] {
+        for wide in [false, true] {
+            let put16 = |v: u16| {
+                if big {
+                    v.to_be_bytes()
+                } else {
+                    v.to_le_bytes()
+                }
+            };
+            let put32 = |v: u32| {
+                if big {
+                    v.to_be_bytes()
+                } else {
+                    v.to_le_bytes()
+                }
+            };
+            let mut bytes = vec![0; if wide { 64 } else { 52 }];
+            bytes[..4].copy_from_slice(b"\x7fELF");
+            bytes[4] = if wide { 2 } else { 1 };
+            bytes[5] = if big { 2 } else { 1 };
+            let num = if wide { 56 } else { 44 };
+            bytes[num..num + 2].copy_from_slice(&put16(1));
+            let view = ElfHeaders::parse(&bytes).unwrap();
+            assert_eq!(
+                view.byte_order().unwrap(),
+                if big {
+                    ByteOrder::Big
+                } else {
+                    ByteOrder::Little
+                }
+            );
+            assert_eq!(view.header.ph_num.offset, num);
+            assert!(view.program(0).is_err());
+
+            let size = if wide { 32 } else { 28 };
+            let mut bytes = vec![0; size];
+            bytes[..4].copy_from_slice(&put32(if wide { 0xfeedfacf } else { 0xfeedface }));
+            bytes[16..20].copy_from_slice(&put32(1));
+            bytes[20..24].copy_from_slice(&put32(8));
+            let view = MachHeaders::parse(&bytes).unwrap();
+            assert_eq!(view.bytes().as_ptr(), bytes.as_ptr());
+            assert_eq!(
+                view.byte_order(),
+                if big {
+                    ByteOrder::Big
+                } else {
+                    ByteOrder::Little
+                }
+            );
+            assert_eq!(view.header.reserved.is_some(), wide);
+            assert!(view.command(0).is_err());
+            for end in 0..size {
+                assert!(MachHeaders::parse(&bytes[..end]).is_err());
+            }
+            bytes.extend_from_slice(&put32(0x1b));
+            bytes.extend_from_slice(&put32(8));
+            let command = MachHeaders::parse(&bytes).unwrap().command(0).unwrap();
+            assert_eq!(command.cmd.value, 0x1b);
+            assert_eq!(command.cmd.offset, size);
+            assert_eq!(command.cmdsize.offset, size + 4);
+            bytes[size + 4..size + 8].copy_from_slice(&put32(0));
+            assert!(MachHeaders::parse(&bytes).unwrap().command(0).is_err());
+            bytes[size + 4..size + 8].copy_from_slice(&put32(u32::MAX));
+            assert!(MachHeaders::parse(&bytes).unwrap().command(0).is_err());
+        }
+    }
+}
+
+#[test]
+fn macho_header_view_matches_fixture_and_selected_fat_slice() {
+    use macho::view::MachHeaders;
+    let bytes = std::fs::read("tests/samples/machO-OSX-x86-ls").unwrap();
+    let view = MachHeaders::parse(&bytes).unwrap();
+    let full = macho::MachO::from_slice(&bytes).unwrap();
+    for (index, expected) in full.load_commands.iter().enumerate() {
+        let command = view.command(index).unwrap();
+        assert_eq!(command.cmd.value, expected.cmd.value);
+        assert_eq!(command.cmd.offset, expected.cmd.offset);
+    }
+    assert!(view.command(usize::MAX).is_err());
+    let fat = build_fat_two_arch();
+    assert!(MachHeaders::parse(&fat).is_err());
+    let thin = macho::MachO::fat_slice_ref(&fat, 1).unwrap();
+    let view = MachHeaders::parse(thin).unwrap();
+    assert_eq!(view.bytes().as_ptr(), thin.as_ptr());
+    assert!(view.header.reserved.is_none());
+}
+
+#[test]
+fn elf_header_view_checks_extended_counts_and_entry_extents() {
+    use elf::view::ElfHeaders;
+    let mut bytes = vec![0; 128];
+    bytes[..6].copy_from_slice(b"\x7fELF\x02\x01");
+    bytes[40..48].copy_from_slice(&64u64.to_le_bytes());
+    bytes[56..58].copy_from_slice(&0xffffu16.to_le_bytes());
+    bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
+    bytes[96..104].copy_from_slice(&1u64.to_le_bytes()); // section zero sh_size
+    bytes[108..112].copy_from_slice(&3u32.to_le_bytes()); // section zero sh_info
+    let view = ElfHeaders::parse(&bytes).unwrap();
+    assert_eq!(view.section_count().unwrap(), 1);
+    assert_eq!(view.program_count().unwrap(), 3);
+    assert_eq!(view.section(0).unwrap().sh_size(), 1);
+    assert!(view.section(1).is_err());
+    bytes[58..60].copy_from_slice(&1u16.to_le_bytes());
+    assert!(ElfHeaders::parse(&bytes).unwrap().section_count().is_err());
+    bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
+    bytes[40..48].copy_from_slice(&u64::MAX.to_le_bytes());
+    assert!(ElfHeaders::parse(&bytes).unwrap().section_count().is_err());
+    bytes[0] = 0;
+    assert!(ElfHeaders::parse(&bytes).is_err());
+    assert!(macho::view::MachHeaders::parse(&[0; 32]).is_err());
 }

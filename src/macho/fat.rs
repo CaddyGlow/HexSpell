@@ -38,9 +38,9 @@ pub struct FatHeader {
 impl FatArch {
     /// Byte range `(start, end)` of this slice inside a FAT file.
     pub fn byte_range(&self) -> Result<(usize, usize), FileParseError> {
-        let start = self.offset as usize;
+        let start = usize::try_from(self.offset).map_err(|_| FileParseError::BufferOverflow)?;
         let end = start
-            .checked_add(self.size as usize)
+            .checked_add(usize::try_from(self.size).map_err(|_| FileParseError::BufferOverflow)?)
             .ok_or(FileParseError::BufferOverflow)?;
         Ok((start, end))
     }
@@ -51,59 +51,16 @@ impl FatHeader {
     ///
     /// Returns `Ok(None)` when `buffer` is not a FAT binary.
     pub fn parse(buffer: &[u8]) -> Result<Option<Self>, FileParseError> {
-        if buffer.len() < 8 {
+        let Some(view) = FatHeaders::parse(buffer)? else {
             return Ok(None);
-        }
-        let magic_bytes: [u8; 4] = buffer[0..4].try_into().unwrap();
-        let magic_be = u32::from_be_bytes(magic_bytes);
-        let magic_le = u32::from_le_bytes(magic_bytes);
-
-        let (order, is_64) = match magic_be {
-            0xCAFEBABE => (ByteOrder::Big, false),
-            0xCAFEBABF => (ByteOrder::Big, true),
-            _ => match magic_le {
-                0xCAFEBABE => (ByteOrder::Little, false),
-                0xCAFEBABF => (ByteOrder::Little, true),
-                _ => return Ok(None),
-            },
         };
-
-        let nfat_arch = order.read_u32(buffer, 4)? as usize;
-        let arch_size = if is_64 { 32 } else { 20 };
-        if nfat_arch == 0 || buffer.len() < 8 + arch_size * nfat_arch {
-            return Err(FileParseError::BufferOverflow);
+        let mut arches = Vec::with_capacity(view.count);
+        for index in 0..view.count {
+            arches.push(view.arch(index)?);
         }
-
-        let mut arches = Vec::with_capacity(nfat_arch);
-        for i in 0..nfat_arch {
-            let base = 8 + i * arch_size;
-            let cpu_type = order.read_u32(buffer, base)?;
-            let cpu_subtype = order.read_u32(buffer, base + 4)?;
-            let (offset, size, align) = if is_64 {
-                (
-                    order.read_u64(buffer, base + 8)?,
-                    order.read_u64(buffer, base + 16)?,
-                    order.read_u32(buffer, base + 24)?,
-                )
-            } else {
-                (
-                    order.read_u32(buffer, base + 8)? as u64,
-                    order.read_u32(buffer, base + 12)? as u64,
-                    order.read_u32(buffer, base + 16)?,
-                )
-            };
-            arches.push(FatArch {
-                cpu_type,
-                cpu_subtype,
-                offset,
-                size,
-                align,
-            });
-        }
-
-        Ok(Some(FatHeader {
-            order,
-            is_64,
+        Ok(Some(Self {
+            order: view.order,
+            is_64: view.is_64,
             arches,
         }))
     }
@@ -221,4 +178,104 @@ fn align_up(value: usize, align: usize) -> usize {
         return value;
     }
     (value + align - 1) & !(align - 1)
+}
+
+/// Borrowed FAT header and architecture table; parsing allocates nothing.
+pub struct FatHeaders<'a> {
+    bytes: &'a [u8],
+    /// FAT header byte order.
+    pub order: ByteOrder,
+    /// Whether architecture entries use the 64-bit layout.
+    pub is_64: bool,
+    /// Number of architecture entries.
+    pub count: usize,
+}
+
+impl<'a> FatHeaders<'a> {
+    /// Detects FAT input and validates the architecture table extent without collecting it.
+    pub fn parse(bytes: &'a [u8]) -> Result<Option<Self>, FileParseError> {
+        let Some((order, is_64, count)) = layout(bytes)? else {
+            return Ok(None);
+        };
+        let stride: usize = if is_64 { 32 } else { 20 };
+        let end = count
+            .checked_mul(stride)
+            .and_then(|n| n.checked_add(8))
+            .ok_or(FileParseError::BufferOverflow)?;
+        if count == 0 {
+            return Err(FileParseError::BufferOverflow);
+        }
+        bytes.get(..end).ok_or(FileParseError::BufferOverflow)?;
+        Ok(Some(Self {
+            bytes,
+            order,
+            is_64,
+            count,
+        }))
+    }
+
+    /// Reads one architecture entry without allocating.
+    pub fn arch(&self, index: usize) -> Result<FatArch, FileParseError> {
+        if index >= self.count {
+            return Err(FileParseError::BufferOverflow);
+        }
+        let stride: usize = if self.is_64 { 32 } else { 20 };
+        let base = index
+            .checked_mul(stride)
+            .and_then(|n| n.checked_add(8))
+            .ok_or(FileParseError::BufferOverflow)?;
+        // Also bounds-check if public count/layout fields have been changed.
+        let end = base
+            .checked_add(stride)
+            .ok_or(FileParseError::BufferOverflow)?;
+        self.bytes
+            .get(base..end)
+            .ok_or(FileParseError::BufferOverflow)?;
+        let (offset, size, align) = if self.is_64 {
+            (
+                self.order.read_u64(self.bytes, base + 8)?,
+                self.order.read_u64(self.bytes, base + 16)?,
+                self.order.read_u32(self.bytes, base + 24)?,
+            )
+        } else {
+            (
+                u64::from(self.order.read_u32(self.bytes, base + 8)?),
+                u64::from(self.order.read_u32(self.bytes, base + 12)?),
+                self.order.read_u32(self.bytes, base + 16)?,
+            )
+        };
+        Ok(FatArch {
+            cpu_type: self.order.read_u32(self.bytes, base)?,
+            cpu_subtype: self.order.read_u32(self.bytes, base + 4)?,
+            offset,
+            size,
+            align,
+        })
+    }
+
+    /// Borrows the thin slice for a selected architecture.
+    pub fn slice(&self, index: usize) -> Result<&'a [u8], FileParseError> {
+        let (start, end) = self.arch(index)?.byte_range()?;
+        self.bytes
+            .get(start..end)
+            .ok_or(FileParseError::BufferOverflow)
+    }
+}
+
+pub(crate) fn layout(bytes: &[u8]) -> Result<Option<(ByteOrder, bool, usize)>, FileParseError> {
+    let Some(raw) = bytes.get(..4) else {
+        return Ok(None);
+    };
+    let magic: [u8; 4] = raw.try_into().map_err(|_| FileParseError::BufferOverflow)?;
+    let (order, is_64) = match u32::from_be_bytes(magic) {
+        0xcafebabe => (ByteOrder::Big, false),
+        0xcafebabf => (ByteOrder::Big, true),
+        _ => match u32::from_le_bytes(magic) {
+            0xcafebabe => (ByteOrder::Little, false),
+            0xcafebabf => (ByteOrder::Little, true),
+            _ => return Ok(None),
+        },
+    };
+    let count = order.read_u32(bytes, 4)? as usize;
+    Ok(Some((order, is_64, count)))
 }

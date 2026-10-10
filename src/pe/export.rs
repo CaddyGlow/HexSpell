@@ -91,7 +91,15 @@ pub struct Exports {
 impl ExportDirectory {
     /// Parses `IMAGE_EXPORT_DIRECTORY` at `offset` in `buffer`.
     pub fn parse(buffer: &[u8], offset: usize) -> Result<Self, FileParseError> {
-        if buffer.len() < offset + 40 {
+        if buffer
+            .get(
+                offset
+                    ..offset
+                        .checked_add(40)
+                        .ok_or(FileParseError::BufferOverflow)?,
+            )
+            .is_none()
+        {
             return Err(FileParseError::BufferOverflow);
         }
 
@@ -183,6 +191,14 @@ impl Exports {
         let functions_table = rva_to_offset(directory.address_of_functions.value)?;
         let ordinal_base = directory.base.value;
 
+        table_extent(buffer, names_table, count, 4)?;
+        table_extent(buffer, ordinals_table, count, 2)?;
+        table_extent(
+            buffer,
+            functions_table,
+            directory.number_of_functions.value as usize,
+            4,
+        )?;
         let mut named = Vec::with_capacity(count);
         for i in 0..count {
             let name_rva_off = names_table + i * 4;
@@ -191,6 +207,9 @@ impl Exports {
             let ord_off = ordinals_table + i * 2;
             let name_ordinal_index = Field::new(extract_u16(buffer, ord_off)?, ord_off, 2);
 
+            if u32::from(name_ordinal_index.value) >= directory.number_of_functions.value {
+                return Err(FileParseError::InvalidFileFormat);
+            }
             let func_off = functions_table + name_ordinal_index.value as usize * 4;
             let function_rva = Field::new(extract_u32(buffer, func_off)?, func_off, 4);
 
@@ -228,6 +247,7 @@ impl Exports {
         let functions_table = rva_to_offset(directory.address_of_functions.value)?;
         let ordinal_base = directory.base.value;
 
+        table_extent(buffer, functions_table, count, 4)?;
         let mut functions = Vec::with_capacity(count);
         for i in 0..count {
             let func_off = functions_table + i * 4;
@@ -285,4 +305,20 @@ fn read_c_string(buffer: &[u8], offset: usize) -> Result<String, FileParseError>
     core::str::from_utf8(&tail[..end])
         .map(|s| s.to_owned())
         .map_err(|_| FileParseError::InvalidFileFormat)
+}
+
+fn table_extent(
+    buffer: &[u8],
+    start: usize,
+    count: usize,
+    stride: usize,
+) -> Result<(), FileParseError> {
+    let end = count
+        .checked_mul(stride)
+        .and_then(|size| start.checked_add(size))
+        .ok_or(FileParseError::BufferOverflow)?;
+    buffer
+        .get(start..end)
+        .ok_or(FileParseError::BufferOverflow)?;
+    Ok(())
 }
