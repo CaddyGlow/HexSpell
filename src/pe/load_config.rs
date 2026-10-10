@@ -39,7 +39,7 @@ pub struct LoadConfigDirectory {
     pub csd_version: Field<u16>,
     /// Reserved fields.
     pub reserved1: Field<u16>,
-    /// Reserved fields.
+    /// Legacy reserved field; low four bytes of EditList for PE32+.
     pub reserved2: Field<u32>,
     /// Security cookie VA.
     pub security_cookie: Field<u64>,
@@ -47,12 +47,23 @@ pub struct LoadConfigDirectory {
 
 impl LoadConfigDirectory {
     /// Parses the load configuration directory at `offset`.
+    ///
+    /// Requires the declared size to contain all modeled fields (at least 64
+    /// bytes for PE32 and 96 for PE32+) and fit in the buffer. Larger versions
+    /// are accepted without parsing their additional fields.
     pub fn parse(buffer: &[u8], offset: usize, pe_type: PEType) -> Result<Self, FileParseError> {
         let size = extract_u32(buffer, offset)?;
-        if size < 64 {
+        let minimum_size = match pe_type {
+            PEType::PE32 => 64,
+            PEType::PE32Plus => 96,
+        };
+        if size < minimum_size {
             return Err(FileParseError::InvalidFileFormat);
         }
-        if buffer.len() < offset + size as usize {
+        let end = offset
+            .checked_add(size as usize)
+            .ok_or(FileParseError::BufferOverflow)?;
+        if buffer.len() < end {
             return Err(FileParseError::BufferOverflow);
         }
 
@@ -144,7 +155,8 @@ impl LoadConfigDirectory {
                 csd_version: Field::new(extract_u16(buffer, offset + 76)?, offset + 76, 2),
                 reserved1: Field::new(extract_u16(buffer, offset + 78)?, offset + 78, 2),
                 reserved2: Field::new(extract_u32(buffer, offset + 80)?, offset + 80, 4),
-                security_cookie: Field::new(extract_u64(buffer, offset + 84)?, offset + 84, 8),
+                // EditList occupies eight bytes at +80 in the Windows AMD64 layout.
+                security_cookie: Field::new(extract_u64(buffer, offset + 88)?, offset + 88, 8),
             }),
         }
     }

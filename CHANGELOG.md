@@ -22,7 +22,11 @@
 
 ## [Unreleased]
 
+
+## [1.1.2] - 2026-10-10
+
 - **PE**
+    - *Fixed*: Read the PE32+ load configuration security cookie at byte 88 after the eight-byte EditList; reject declared structures shorter than the cookie and check extent arithmetic.
     - *Fixed*: Reject overflowing TLS directory offsets for both PE32 and PE32+ instead of panicking.
 
 
