@@ -20,6 +20,20 @@
 >     - *Added*: Your message here using `markdown`.
 
 
+## [Unreleased]
+
+- **PE**
+    - *Fixed*: Reject overflowing TLS directory offsets for both PE32 and PE32+ instead of panicking.
+
+
+## [1.1.1] - 2026-10-08
+
+- **PE**
+    - *Fixed*: Bound certificate headers, payloads and aligned record steps by the declared security directory; reject inconsistent empty directories and overflowing offsets.
+- **General**
+    - *Documentation*: Point crate metadata at the maintained CaddyGlow fork and caddy-hexspell documentation.
+
+
 ## [1.0.0] - 2026-07-07
 
 - **General**

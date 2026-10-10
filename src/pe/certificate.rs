@@ -39,7 +39,10 @@ impl WinCertificate {
 
     /// Parses one `WIN_CERTIFICATE` at `offset`.
     pub fn parse(buffer: &[u8], offset: usize) -> Result<Self, FileParseError> {
-        if buffer.len() < offset + Self::HEADER_SIZE {
+        if offset
+            .checked_add(Self::HEADER_SIZE)
+            .is_none_or(|end| end > buffer.len())
+        {
             return Err(FileParseError::BufferOverflow);
         }
 
@@ -74,12 +77,16 @@ impl CertificateTable {
     ///
     /// `file_offset` and `size` come from `IMAGE_DIRECTORY_ENTRY_SECURITY` (file offsets, not RVAs).
     pub fn parse(buffer: &[u8], file_offset: u32, size: u32) -> Result<Self, FileParseError> {
-        if file_offset == 0 || size == 0 {
+        if file_offset == 0 && size == 0 {
             return Ok(CertificateTable {
                 offset: 0,
                 size: 0,
                 certificates: Vec::new(),
             });
+        }
+
+        if file_offset == 0 || size == 0 || !file_offset.is_multiple_of(8) {
+            return Err(FileParseError::InvalidFileFormat);
         }
 
         let offset = file_offset as usize;
@@ -94,15 +101,23 @@ impl CertificateTable {
         let mut certificates = Vec::new();
         let mut cursor = offset;
         while cursor < end {
-            let cert = WinCertificate::parse(buffer, cursor)?;
-            let aligned = align_up(cert.length.value as usize, 8);
-            if aligned == 0 {
-                return Err(FileParseError::InvalidFileFormat);
-            }
-            certificates.push(cert);
-            cursor = cursor
+            // Bound the parser by the directory, not merely the containing file.
+            let cert = WinCertificate::parse(&buffer[..end], cursor)?;
+            let payload_end = cursor
+                .checked_add(cert.length.value as usize)
+                .ok_or(FileParseError::BufferOverflow)?;
+            let aligned = (cert.length.value as usize)
+                .checked_add(7)
+                .ok_or(FileParseError::BufferOverflow)?
+                & !7;
+            let next = cursor
                 .checked_add(aligned)
                 .ok_or(FileParseError::BufferOverflow)?;
+            if payload_end > end || next > end {
+                return Err(FileParseError::BufferOverflow);
+            }
+            certificates.push(cert);
+            cursor = next;
         }
 
         Ok(CertificateTable {
@@ -113,6 +128,47 @@ impl CertificateTable {
     }
 }
 
-fn align_up(value: usize, alignment: usize) -> usize {
-    (value + alignment - 1) & !(alignment - 1)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    fn record(length: u32, total: usize) -> Vec<u8> {
+        let mut bytes = vec![0; total];
+        bytes[8..12].copy_from_slice(&length.to_le_bytes());
+        bytes[12..16].copy_from_slice(&[0, 2, 2, 0]);
+        bytes
+    }
+
+    #[test]
+    fn rejects_record_crossing_declared_table() {
+        assert!(CertificateTable::parse(&record(16, 24), 8, 8).is_err());
+    }
+
+    #[test]
+    fn rejects_alignment_crossing_declared_table() {
+        assert!(CertificateTable::parse(&record(9, 24), 8, 9).is_err());
+    }
+
+    #[test]
+    fn rejects_partial_header_and_inconsistent_directory() {
+        assert!(CertificateTable::parse(&record(8, 24), 8, 7).is_err());
+        assert!(CertificateTable::parse(&record(8, 24), 0, 8).is_err());
+        assert!(CertificateTable::parse(&record(8, 24), 8, 0).is_err());
+        assert!(WinCertificate::parse(&[], usize::MAX).is_err());
+    }
+
+    #[test]
+    fn accepts_aligned_records_and_preserves_unknown_types() {
+        let mut bytes = record(9, 32);
+        bytes[24..28].copy_from_slice(&8_u32.to_le_bytes());
+        let table = CertificateTable::parse(&bytes, 8, 24).unwrap();
+        assert_eq!(table.certificates.len(), 2);
+        assert_eq!(table.certificates[0].data(&bytes).unwrap(), &[0]);
+        assert_eq!(table.certificates[1].certificate_type.value, 0);
+        assert!(CertificateTable::parse(&[], 0, 0)
+            .unwrap()
+            .certificates
+            .is_empty());
+    }
 }
