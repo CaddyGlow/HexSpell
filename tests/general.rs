@@ -1,4 +1,10 @@
-#![cfg(feature = "std")]
+#![cfg(all(
+    feature = "std",
+    feature = "pe",
+    feature = "elf",
+    feature = "macho",
+    feature = "common"
+))]
 
 /// General tests for shared utilities
 /// ==================================

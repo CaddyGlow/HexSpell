@@ -22,6 +22,19 @@
 
 ## [Unreleased]
 
+- **General**
+    - *Added*: Independent `pe`, `elf`, `macho`, and `common` feature flags, enabled by default; core fields/errors/byte utilities remain always available.
+    - *Changed*: **Breaking** — package version becomes 2.0.0. `default-features = false` now disables formats and the public common helper interface. Enable `pe,elf,macho,common` explicitly to retain the previous no-std surface.
+
+- **PE**
+    - *Added*: Opt-in `pe-write` feature (disabled by default) for dependency-free PE32/PE32+ construction with owned sections, builder-specific handles, resolved layouts, imports, local exports, checked fixups, base relocations, TLS, and x64 runtime-function registration.
+    - *Added*: Lossless owned resource trees, canonical serialization, transactional append editing, explicit certificate preservation/stripping outcomes, and manifest/string/version/icon helpers.
+    - *Added*: Linux generation examples for Hello EXEs and callable DLLs, matching Windows loaders, independent PE inspection, and Windows acceptance scripts.
+    - *Fixed*: Mask resource-name high bits and check resource metadata/payload extents, aggregate traversal work, and certificate aliases before editing.
+    - *Fixed*: Place inserted sections after complete occupied raw/virtual extents; reject invalid alignment before mutation and include header growth/overlays in insertion plans.
+    - *Fixed*: Reject resource edits whose declared directory slots extend beyond the physical optional header, and reparse edited bytes before committing. Reject overflowing insertion extents before mutation and named x86 import RVAs that collide with the ordinal flag.
+    - *Documentation*: Document generation, resource editing, validation, and implementation milestones.
+
 
 ## [1.2.1] - 2026-10-11
 

@@ -24,10 +24,17 @@ back to disk when you need to patch an executable.
 - **Multi-format** — PE (Windows), ELF (Linux), and Mach-O (macOS) in one crate.
 - **Parse and patch** — read entry points, sections, imports, exports, and more; update headers and write the file back with `write_file`.
 - **Structural edits** — insert sections and load segments, sync layout, apply relocations.
+- **PE generation** (`pe-write` feature) — construct x86/x64 EXEs and DLLs from section bytes, with imports, exports, relocations, TLS, and resources.
+- **Resource editing** (`pe-write` feature) — edit lossless owned trees transactionally; helpers for manifests, strings, versions, and icons.
 - **Lazy parsers** — imports, exports, TLS, exceptions, symbols, and other tables parsed on demand.
 - **Endianness-aware** — ELF and Mach-O byte order handled via `ByteOrder`.
 
 See [`docs/coverage.md`](docs/coverage.md) for exactly what is modeled per format.
+See the [PE generation guide](docs/guide.md#pe-generation-and-resource-editing) and
+the `pe_hello`, `pe_dll`, and Windows `pe_dll_load` examples for construction and validation.
+Formats (`pe`, `elf`, `macho`) and the public helper interface (`common`) have
+independent default-enabled features. `pe-write` is opt-in and implies `pe`.
+See [feature selection and 2.0 migration](docs/guide.md#features-and-migrating-to-20).
 
 ## Installation
 

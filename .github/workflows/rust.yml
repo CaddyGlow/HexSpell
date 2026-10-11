@@ -44,6 +44,11 @@ jobs:
     - name: Test
       run: cargo test --verbose
 
+    - name: Check opt-in PE writing APIs
+      run: |
+        cargo clippy --all-features --all-targets -- -D warnings
+        cargo test --all-features
+
     - name: Fuzz harness regression tests
       run: |
         cargo clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
@@ -60,6 +65,15 @@ jobs:
       run: |
         python tools/pe-bench/build_corpus.py "$HEXSPELL_PE_CORPUS"
         cargo test --test pefile -- --ignored
+    - name: Generate and independently inspect PE examples
+      run: |
+        mkdir -p /tmp/hexspell-generated
+        for arch in x86 x64; do
+          cargo run --features pe-write --example pe_hello -- "$arch" "/tmp/hexspell-generated/hello-$arch.exe"
+          cargo run --features pe-write --example pe_dll -- "$arch" "/tmp/hexspell-generated/demo-$arch.dll"
+          python tests/scripts/inspect_generated_pe.py --arch "$arch" --kind exe "/tmp/hexspell-generated/hello-$arch.exe"
+          python tests/scripts/inspect_generated_pe.py --arch "$arch" --kind dll "/tmp/hexspell-generated/demo-$arch.dll"
+        done
     - name: Benchmark harness smoke test
       run: |
         cargo run --release --locked --manifest-path tools/pe-bench/Cargo.toml -- /tmp/hexspell-pe-corpus 1 1
@@ -74,8 +88,44 @@ jobs:
         components: clippy
         targets: thumbv7em-none-eabi
     - name: Check bare-metal target
-      run: cargo check --no-default-features --target thumbv7em-none-eabi
+      run: cargo check --no-default-features --features pe,elf,macho,common --target thumbv7em-none-eabi
     - name: Clippy without std
-      run: cargo clippy --no-default-features --all-targets -- -D warnings
+      run: cargo clippy --no-default-features --features pe,elf,macho,common --all-targets -- -D warnings
     - name: Test in-memory APIs without std
-      run: cargo test --no-default-features
+      run: cargo test --no-default-features --features pe,elf,macho,common
+    - name: PE writing without std
+      run: |
+        cargo check --no-default-features --features pe-write --target thumbv7em-none-eabi
+        cargo clippy --no-default-features --features pe-write --all-targets -- -D warnings
+        cargo test --no-default-features --features pe-write
+
+  feature-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features:
+          - ""
+          - pe
+          - elf
+          - macho
+          - common
+          - pe,elf
+          - pe,macho
+          - pe,common
+          - elf,macho
+          - elf,common
+          - macho,common
+          - pe,elf,macho
+          - pe,elf,common
+          - pe,macho,common
+          - elf,macho,common
+          - pe,elf,macho,common
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+    - name: Check independent formats and common interface
+      run: |
+        cargo clippy --no-default-features --features '${{ matrix.features }}' --all-targets -- -D warnings
+        cargo test --no-default-features --features '${{ matrix.features }}'

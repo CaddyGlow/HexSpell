@@ -51,3 +51,51 @@ The corpus combines documented compiler-built fixtures and deterministic
 synthetic images; every generated file has provenance and a SHA-256 hash in its
 manifest. See [benchmark instructions](../../tools/pe-bench/README.md) for corpus
 details, adding owned real-world files, and recording timing results.
+
+## Generated EXE and DLL acceptance
+
+`inspect_generated_pe.py` independently checks the generation examples using
+pefile: headers, alignments, checksum, section ranges, imports/IAT permissions,
+TLS pointer widths and relocation sites, x64 runtime-function coverage, and the
+three DLL exports. It prints hashes and preferred bases for recording results.
+
+```sh
+cargo run --features pe-write --example pe_hello -- x64 /tmp/hello-x64.exe
+cargo run --features pe-write --example pe_dll -- x64 /tmp/demo-x64.dll
+/tmp/hexspell-pefile-venv/bin/python tests/scripts/inspect_generated_pe.py --arch x64 --kind exe /tmp/hello-x64.exe
+/tmp/hexspell-pefile-venv/bin/python tests/scripts/inspect_generated_pe.py --arch x64 --kind dll /tmp/demo-x64.dll
+```
+
+Repeat with `x86` for PE32. These checks are separate from Windows execution,
+forced relocation, TLS callback ordering, and unwind-runtime verification.
+
+For Windows runtime validation, build `pe_dll_load` with `--features pe-write` for
+both `i686-pc-windows-msvc` and `x86_64-pc-windows-msvc`. The MSVC Rust standard
+library may require Microsoft's x86/x64 Visual C++ runtime redistributables in the
+test guest; the generated EXEs/DLLs themselves do not use the CRT.
+
+Generate `hello-no-tls-ARCH.exe` using the Hello example's `--no-tls-callback`
+argument and `hello-conflict-ARCH.exe` using `--conflicting-base`. Copy images and
+architecture-matched loaders (`pe_dll_load-x86.exe`, `pe_dll_load-x64.exe`) into one
+directory. Run on an interactive Windows desktop:
+
+```powershell
+.\tests\scripts\pe-runtime.ps1 -Directory C:\hexspell
+.\tests\scripts\pe-resource-runtime.ps1 -Paths C:\hexspell\hello-x86.exe,C:\hexspell\hello-x64.exe
+```
+
+The runtime driver checks exports, exact-base reservation before DLL loading,
+TLS-negative exit 42, normal/conflicting-base EXE dialogs and exit codes, and x64
+runtime unwind APIs on a relocated mapping. The resource driver uses native
+resource/version/icon APIs. Exercise actual resource edits too:
+
+```sh
+cargo run --features pe-write --example pe_resources -- hello-x64.exe edited-x64.exe preserve
+```
+
+```powershell
+.\tests\scripts\pe-resource-runtime.ps1 -Paths C:\hexspell\edited-x64.exe -ExpectedString 'Edited resource' -ExpectedVersionMajor 2
+```
+
+Repeat the editing check for x86. The drivers print JSON with hashes/results for
+recording validation evidence; no generated binaries need to be committed.

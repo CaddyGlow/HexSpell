@@ -1,4 +1,4 @@
-#![cfg(feature = "std")]
+#![cfg(all(feature = "std", feature = "pe", feature = "common"))]
 
 use hexspell::pe::{header::PEType, load_config::LoadConfigDirectory, PE};
 

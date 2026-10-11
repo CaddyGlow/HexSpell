@@ -1,6 +1,6 @@
 [package]
 name = "caddy-hexspell"
-version = "1.2.1"
+version = "2.0.0"
 authors=["Mestre <namestre3@protonmail.com>"]
 edition = "2021"
 rust-version = "1.88"
@@ -18,8 +18,13 @@ categories = ["development-tools", "parsing"]
 name = "hexspell"
 
 [features]
-default = ["std"]
+default = ["std", "pe", "elf", "macho", "common"]
 std = []
+pe = []
+elf = []
+macho = []
+common = []
+pe-write = ["pe"]
 
 [dev-dependencies]
 toml = "1.0" # For testing purpose
@@ -27,4 +32,20 @@ toml = "1.0" # For testing purpose
 [[bench]]
 name = "parsing"
 harness = false
-required-features = ["std"]
+required-features = ["std", "pe", "elf", "macho", "common"]
+
+[[example]]
+name = "pe_hello"
+required-features = ["std", "pe-write"]
+
+[[example]]
+name = "pe_dll"
+required-features = ["std", "pe-write"]
+
+[[example]]
+name = "pe_dll_load"
+required-features = ["std", "pe-write"]
+
+[[example]]
+name = "pe_resources"
+required-features = ["std", "pe-write"]

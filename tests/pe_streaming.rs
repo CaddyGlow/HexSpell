@@ -1,4 +1,4 @@
-#![cfg(feature = "std")]
+#![cfg(all(feature = "std", feature = "pe", feature = "common"))]
 
 use hexspell::pe::{self, header, import::ImportEntry, read::ImportEntryRef, PE};
 use std::borrow::Cow;

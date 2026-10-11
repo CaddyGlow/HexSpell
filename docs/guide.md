@@ -27,6 +27,11 @@ section headers, and segments.
 
 ## PE (Windows)
 
+PE32 and PE32+ images can also be built from scratch with `pe::build::PeBuilder`.
+The [generation design](pe-generation.md) and [implementation plan](pe-generation-plan.md)
+describe the scope and validation gates. See [PE generation and resource editing](#pe-generation-and-resource-editing)
+below for the implemented API.
+
 PE files are modeled as:
 
 ```
@@ -305,3 +310,145 @@ owned versus streaming directory inspection, names, command traversal, FAT
 selection, and linear versus indexed RVA lookup. File I/O and setup are outside
 timing; allocation counts include calls to allocate or reallocate, and byte counts
 are total requested bytes rather than peak live memory.
+
+## PE generation and resource editing
+
+Enable the opt-in `pe-write` feature (disabled by default). It adds no dependencies
+and works with `no_std` plus `alloc`; `std` is needed only for file APIs/examples:
+
+```toml
+[dependencies]
+caddy-hexspell = { version = "2.0", features = ["pe-write"] }
+```
+
+`pe::build` constructs x86 PE32 and x64 PE32+ images from owned section bytes,
+without a template, linker, SDK, or runtime dependencies. Callers provide machine
+code. This minimal x64 DLL entry returns `TRUE`:
+
+```rust
+use hexspell::pe::{
+    build::{ImageKind, PeBuilder, SectionSpec, Target},
+    section::{CODE, EXECUTE, READ},
+};
+
+let mut builder = PeBuilder::new(Target::X64, ImageKind::Dll);
+let text = builder.add_section(SectionSpec::new(
+    ".text", vec![0xb8, 1, 0, 0, 0, 0xc3], CODE | EXECUTE | READ,
+))?;
+let entry = builder.define_symbol(&text, 0)?;
+builder.set_entry_point(&entry)?;
+let (image, layout) = builder.build_with_layout()?;
+assert_eq!(image.optional_header.entry_point.value, layout.symbol(&entry).unwrap().rva);
+# Ok::<(), hexspell::errors::FileParseError>(())
+```
+
+The returned image is an ordinary owned `PE`; its `Field` offsets refer to actual
+emitted bytes and existing patching APIs apply. `build()` returns only the image.
+Repeated builds preserve the specification and emit deterministic bytes. Handles
+belong to one builder; foreign handles fail. Builders/handles use `Rc` identity and
+are not `Send` or `Sync`. Use independent builders for independent outputs.
+
+`SectionSpec::virtual_size` may exceed the supplied bytes for zero-filled tails.
+Symbols may denote virtual positions and exclusive ends, but entry points,
+callbacks, exports, and fixup writes must refer to initialized executable or
+writable bytes as appropriate. The layout report gives RVAs, VAs, file locations,
+and import slots; virtual-only symbols and end markers have no file offset.
+
+`add_import` and `add_import_ordinal` return stable IAT handles; exact duplicates
+reuse a slot. `add_export` accepts an explicit ordinal and optional public name;
+`set_export_base` controls sparse ordinal tables, and names are sorted on emission.
+`add_fixup` supports RVA32, x86 VA32, x64 VA64, and signed Rel32 writes with explicit
+section-relative origins and addends. Absolute VA writes generate base relocations.
+`set_tls` registers a template, four writable index bytes, and ordered callbacks.
+`add_runtime_function` registers x64 ranges and caller-supplied unwind bytes.
+
+Header options currently expose image base, subsystem, and file/section alignments.
+Conventional alignments are supported; low-alignment images are rejected. Generated
+table names (`.idata`, `.edata`, `.reloc`, `.tlsdir`, `.pdata`, `.rsrc`) are reserved.
+Unwind bytes are caller-reviewed opaque data; this API does not encode arbitrary
+compiler unwind programs. Forwarders and data exports are not supported by the builder.
+
+Resources have two representations. `ResourceTree` remains the lazy on-disk view.
+`ResourceDirectoryOwned` (also `OwnedResources`) owns editable metadata, raw UTF-16
+keys, and payload bytes. `owned_resources()` imports the complete tree and checks
+metadata and payload extents, including payloads in another section. `get`, `insert`,
+`replace`, `remove`, and `rename` operate on generic paths. Insert requires existing
+parent directories; `entries` permits explicit enumeration and tree construction.
+Duplicate keys require replacement. Unknown payloads and unpaired surrogates survive
+import and emission; canonical ordering and padding can change.
+
+```rust
+use hexspell::pe::resource::SignaturePolicy;
+# let mut image = hexspell::pe::PE::from_buffer(include_bytes!("../tests/samples/sample1.exe").to_vec())?;
+let mut resources = image.owned_resources()?;
+resources.set_string(42, 0x0409, "Hello".encode_utf16().collect::<Vec<_>>())?;
+let report = image.replace_resources(&resources, SignaturePolicy::PreserveBytes)?;
+assert_eq!(image.owned_resources()?.string(42, 0x0409)?, Some("Hello".encode_utf16().collect()));
+# let _ = report;
+# Ok::<(), hexspell::errors::FileParseError>(())
+```
+
+`replace_resources` edits a candidate and commits only after validation, preserving
+existing section RVAs. It appends a new resource section even for smaller replacements;
+old resource bytes remain unreachable. It rejects overlapping/unsupported layouts.
+Overlays and tracked debug/COFF/certificate file pointers move with inserted bytes.
+Every successful edit recomputes summaries/checksum. `SignaturePolicy::PreserveBytes`
+keeps certificate bytes and reports `Invalidated`; `Strip` removes a verified
+certificate range and clears its directory. Unsigned inputs report `Unsigned`.
+No signature is generated, and ambiguous certificate aliases are rejected.
+
+Typed helpers include checked UTF-8 `Manifest` access, sixteen-slot `StringTable`
+blocks, language-aware `set_string`/`string`, nested `VersionBlock` parsing/emission,
+and ICO `Icon` parsing/emission with coordinated `set_icon`/`icon` tree operations.
+Version unknown keys/values/children survive semantically; original padding does not.
+Icon replacement allocates unused IDs and retains old image payloads that might be
+shared. Cursor, menu, dialog, and bitmap resources remain opaque payloads.
+
+Generate complete GUI executables and callable DLLs on Linux:
+
+```sh
+cargo run --features pe-write --example pe_hello -- x86 hello-x86.exe
+cargo run --features pe-write --example pe_hello -- x64 hello-x64.exe
+cargo run --features pe-write --example pe_dll -- x86 demo-x86.dll
+cargo run --features pe-write --example pe_dll -- x64 demo-x64.dll
+cargo run --features pe-write --example pe_resources -- hello-x64.exe edited-x64.exe preserve
+```
+
+On Windows, run `pe_dll_load` built for the DLL's architecture with its absolute
+path; append `--force-relocation` to reserve the preferred base before loading.
+The Hello examples exercise TLS-before-entry, dereferenced relocated pointers,
+imports, manifests, RCDATA, strings, versions, icons, and x64 unwind metadata.
+See [validation scripts](../tests/scripts/README.md) for independent inspection
+and Windows runtime checks, including negative controls and forced relocation.
+
+## Features and migrating to 2.0
+
+| Feature | Default | Surface |
+| --- | --- | --- |
+| `std` | Yes | Filesystem I/O and standard-library error conversions |
+| `pe` | Yes | PE parsing and existing section/layout editing |
+| `elf` | Yes | ELF parsing and editing |
+| `macho` | Yes | Mach-O parsing and editing |
+| `common` | Yes | Public `reloc`, `strings`, `validation`, and `write` helpers; format-specific helpers follow enabled formats |
+| `pe-write` | No | New PE construction, owned resource editing, and typed resource codecs; implies `pe` |
+
+Core `field`, `errors`, and `utils` remain available in every configuration. Parsers
+retain the private string-reading machinery they need when `common` is disabled.
+`common` itself does not enable any format; generic helpers work by themselves.
+
+**Breaking:** `default-features = false` now disables formats and the common helper
+interface as well as `std`. To preserve the previous no-std surface, explicitly
+enable `features = ["pe", "elf", "macho", "common"]`. Default users keep all
+existing formats and helpers. Examples of narrower configurations:
+
+```toml
+# PE parser only, no standard library or public common helper interface.
+caddy-hexspell = { version = "2.0", default-features = false, features = ["pe"] }
+# In-memory PE generation and resource editing only.
+caddy-hexspell = { version = "2.0", default-features = false, features = ["pe-write"] }
+# Shared fields plus generic helpers, with no format parser.
+caddy-hexspell = { version = "2.0", default-features = false, features = ["common"] }
+```
+
+Choose one dependency declaration. Feature unification is additive: another
+dependency may enable additional formats for the same package in the build graph.

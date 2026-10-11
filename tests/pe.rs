@@ -1,4 +1,4 @@
-#![cfg(feature = "std")]
+#![cfg(all(feature = "std", feature = "pe", feature = "common"))]
 
 /// HexSpell PE
 /// ====================================
@@ -1007,7 +1007,7 @@ fn test_pe_resource_tree_synthetic() {
     // Root directory: 1 named entry, 0 id entries
     buffer[0x0c..0x0e].copy_from_slice(&1u16.to_le_bytes()); // named entries
                                                              // Entry: name offset 0x30, data offset 0x50 (leaf)
-    buffer[0x10..0x14].copy_from_slice(&0x30u32.to_le_bytes());
+    buffer[0x10..0x14].copy_from_slice(&0x8000_0030u32.to_le_bytes());
     buffer[0x14..0x18].copy_from_slice(&0x50u32.to_le_bytes()); // leaf (high bit clear)
                                                                 // Unicode name at 0x30: length 4 chars "TEST"
     buffer[0x30..0x32].copy_from_slice(&4u16.to_le_bytes());

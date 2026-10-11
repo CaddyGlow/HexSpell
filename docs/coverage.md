@@ -22,6 +22,10 @@ method call; “Eager” structures are filled during `from_buffer`.
 | Rich header / certs / CLR / ARM64x | Modeled | Lazy — `rich_header`, `certificates`, `clr`, `architecture_data` | Read-only certs |
 | Line numbers (COFF) | Modeled | Lazy — `section_linenumbers` | |
 | Section rename / remove / layout sync | Partial | `layout::rename_section`, `remove_section`, `sync_layout` | Aligned raw data and overlay/file-pointer preservation tested against pefile. Embedded code/data RVAs and entry-point rebuilding after middle-section removal remain partial. |
+| PE32 / PE32+ construction | Supported (`pe-write`) | `build::PeBuilder` | Owned sections/symbols, checked layout, imports, local exports, fixups/base relocations, TLS, caller-supplied x64 unwind data; returns ordinary `PE` |
+| Resource payloads / owned trees | Supported (`pe-write`) | `ResourceDataEntry::payload`, `PE::owned_resources` | Complete file-backed extents; raw UTF-16 keys and unknown payloads preserved |
+| Resource serialization / editing | Supported (`pe-write`) | `ResourceDirectoryOwned::serialize`, `PE::replace_resources` | Transactional append; existing RVAs retained; explicit signature policy; no compaction |
+| Typed resources | Partial (`pe-write`) | `resource::{Manifest, strings, version, icon}` | String blocks/languages, nested version blocks, ICO/group IDs; other types remain opaque |
 
 ## ELF (Linux / BSD)
 

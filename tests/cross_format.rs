@@ -1,4 +1,10 @@
-#![cfg(feature = "std")]
+#![cfg(all(
+    feature = "std",
+    feature = "pe",
+    feature = "elf",
+    feature = "macho",
+    feature = "common"
+))]
 
 //! Cross-format helpers, round-trip regression, FAT selection, and endianness tests.
 

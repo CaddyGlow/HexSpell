@@ -1,4 +1,4 @@
-#![cfg(feature = "std")]
+#![cfg(all(feature = "std", feature = "macho", feature = "common"))]
 
 /// HexSpell Mach-O
 /// ====================================

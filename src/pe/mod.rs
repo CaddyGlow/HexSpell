@@ -23,6 +23,8 @@ use crate::field::{Field, FixedBytes};
 
 pub mod arch_data;
 pub mod bound;
+#[cfg(feature = "pe-write")]
+pub mod build;
 pub mod certificate;
 pub mod clr;
 pub mod coff;
@@ -573,25 +575,66 @@ impl PE {
         let file_alignment = self.optional_header.file_alignment.value;
         let section_alignment = self.optional_header.section_alignment.value;
 
+        if !file_alignment.is_power_of_two() || !section_alignment.is_power_of_two() {
+            return Err(FileParseError::InvalidFileFormat);
+        }
+        let align = |value: u32, alignment: u32| {
+            value
+                .checked_add(alignment - 1)
+                .map(|value| value & !(alignment - 1))
+                .ok_or(FileParseError::ValueTooLarge)
+        };
+
         let last_section = self
             .sections
             .last()
             .ok_or(FileParseError::InvalidFileFormat)?;
 
-        let new_section_offset =
-            last_section.characteristics.offset + last_section.characteristics.size;
-        let new_section_rva = (last_section.virtual_address.value
-            + last_section.virtual_size.value
-            + section_alignment
-            - 1)
-            & !(section_alignment - 1);
-        let virtual_size = (size + section_alignment - 1) & !(section_alignment - 1);
-        let size_of_raw_data = (size + file_alignment - 1) & !(file_alignment - 1);
-        let raw_data_ptr = (last_section.pointer_to_raw_data.value
-            + last_section.size_of_raw_data.value
-            + file_alignment
-            - 1)
-            & !(file_alignment - 1);
+        let new_section_offset = last_section
+            .characteristics
+            .offset
+            .checked_add(last_section.characteristics.size)
+            .ok_or(FileParseError::BufferOverflow)?;
+        let mut virtual_end = self.optional_header.size_of_headers.value;
+        let mut raw_end = self.optional_header.size_of_headers.value;
+        for section in &self.sections {
+            virtual_end = virtual_end.max(
+                section
+                    .virtual_address
+                    .value
+                    .checked_add(
+                        section
+                            .virtual_size
+                            .value
+                            .max(section.size_of_raw_data.value),
+                    )
+                    .ok_or(FileParseError::ValueTooLarge)?,
+            );
+            if section.size_of_raw_data.value != 0 {
+                raw_end = raw_end.max(
+                    section
+                        .pointer_to_raw_data
+                        .value
+                        .checked_add(section.size_of_raw_data.value)
+                        .ok_or(FileParseError::ValueTooLarge)?,
+                );
+            }
+        }
+        let new_section_rva = align(virtual_end, section_alignment)?;
+        let virtual_size = align(size, section_alignment)?;
+        let size_of_raw_data = align(size, file_alignment)?;
+        let raw_data_ptr = align(raw_end, file_alignment)?;
+
+        // Check the complete new extents before insertion can mutate the buffer.
+        align(
+            new_section_rva
+                .checked_add(virtual_size)
+                .ok_or(FileParseError::ValueTooLarge)?,
+            section_alignment,
+        )?;
+        raw_data_ptr
+            .checked_add(size_of_raw_data)
+            .ok_or(FileParseError::ValueTooLarge)?;
 
         let mut name_bytes = [0u8; 8];
         let name_slice = name.as_bytes();
@@ -617,8 +660,11 @@ impl PE {
         &mut self,
         new: section::NewSection,
     ) -> Result<&section::PeSection, FileParseError> {
-        let section_header =
-            self.build_section_header(&new.name, new.data.len() as u32, new.characteristics)?;
+        let section_header = self.build_section_header(
+            &new.name,
+            u32::try_from(new.data.len()).map_err(|_| FileParseError::ValueTooLarge)?,
+            new.characteristics,
+        )?;
         self.insert_section_raw(section_header, new.data)?;
         Ok(self.sections.last().expect("section just pushed"))
     }
