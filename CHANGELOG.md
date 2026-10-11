@@ -22,6 +22,9 @@
 
 ## [Unreleased]
 
+
+## [1.2.1] - 2026-10-11
+
 - **General**
     - *Fixed*: Return `BufferOverflow` for integer reads whose file offsets overflow `usize`.
 
