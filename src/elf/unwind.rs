@@ -70,9 +70,13 @@ impl AddressArray {
         let end = offset
             .checked_add(size)
             .ok_or(FileParseError::BufferOverflow)?;
-        let mut cursor = offset;
-        let mut entries = Vec::with_capacity(size / width);
-        while cursor + width <= end {
+        buffer
+            .get(offset..end)
+            .ok_or(FileParseError::BufferOverflow)?;
+        let count = size / width;
+        let mut entries = Vec::with_capacity(count);
+        for index in 0..count {
+            let cursor = offset + index * width;
             let value = if width == 4 {
                 order.read_u32(buffer, cursor)? as u64
             } else {
@@ -81,7 +85,6 @@ impl AddressArray {
             entries.push(AddressArrayEntry {
                 value: Field::new(value, cursor, width),
             });
-            cursor += width;
         }
         Ok(Self { entries })
     }

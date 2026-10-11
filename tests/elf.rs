@@ -1306,6 +1306,31 @@ fn test_elf_extended_shnum_core_and_ar_archive() {
     assert_eq!(archive.members[0].data(&ar).unwrap(), b"ELF!");
 }
 
+#[test]
+fn test_elf_extended_shnum_rejects_overflowing_section_offset() {
+    let mut buffer = elf64_base(0, 0, 0, 0, 72);
+    buffer[40..48].copy_from_slice(&u64::MAX.to_le_bytes());
+
+    assert!(matches!(
+        elf::ELF::from_buffer(buffer),
+        Err(FileParseError::BufferOverflow)
+    ));
+}
+
+#[test]
+fn test_elf_address_array_rejects_size_beyond_buffer_before_allocating() {
+    assert!(matches!(
+        elf::unwind::AddressArray::parse(
+            &[0; 8],
+            0,
+            usize::MAX,
+            8,
+            hexspell::field::ByteOrder::Little,
+        ),
+        Err(FileParseError::BufferOverflow)
+    ));
+}
+
 fn elf64_base(phnum: u16, shnum: u16, shstrndx: u16, shoff: usize, len: usize) -> Vec<u8> {
     let mut buffer = vec![0u8; len];
     buffer[0..4].copy_from_slice(&[0x7F, b'E', b'L', b'F']);

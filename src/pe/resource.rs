@@ -161,17 +161,35 @@ impl ResourceTree {
         offset: usize,
         rva_to_offset: impl Fn(u32) -> Result<usize, FileParseError>,
     ) -> Result<Self, FileParseError> {
-        let root = parse_node(buffer, offset, offset, &rva_to_offset)?;
+        let mut ancestors = Vec::new();
+        let root = parse_node(buffer, offset, offset, &rva_to_offset, &mut ancestors)?;
         Ok(ResourceTree { offset, root })
     }
 }
 
-#[allow(clippy::only_used_in_recursion)]
 fn parse_node(
     buffer: &[u8],
     resource_base: usize,
     offset: usize,
     rva_to_offset: &impl Fn(u32) -> Result<usize, FileParseError>,
+    ancestors: &mut Vec<usize>,
+) -> Result<ResourceDirectoryNode, FileParseError> {
+    const MAX_RESOURCE_DEPTH: usize = 256;
+    if ancestors.len() >= MAX_RESOURCE_DEPTH || ancestors.contains(&offset) {
+        return Err(FileParseError::InvalidFileFormat);
+    }
+    ancestors.push(offset);
+    let result = parse_node_inner(buffer, resource_base, offset, rva_to_offset, ancestors);
+    ancestors.pop();
+    result
+}
+
+fn parse_node_inner(
+    buffer: &[u8],
+    resource_base: usize,
+    offset: usize,
+    rva_to_offset: &impl Fn(u32) -> Result<usize, FileParseError>,
+    ancestors: &mut Vec<usize>,
 ) -> Result<ResourceDirectoryNode, FileParseError> {
     let header = ResourceDirectory::parse(buffer, offset)?;
     let named_count = header.number_of_named_entries.value as usize;
@@ -204,7 +222,7 @@ fn parse_node(
             .ok_or(FileParseError::BufferOverflow)?;
 
         if entry.is_directory() {
-            let directory = parse_node(buffer, resource_base, child_off, rva_to_offset)?;
+            let directory = parse_node(buffer, resource_base, child_off, rva_to_offset, ancestors)?;
             entries.push(ResourceEntry::Directory {
                 name,
                 id,

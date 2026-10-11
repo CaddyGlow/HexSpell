@@ -158,13 +158,19 @@ impl SymbolEntry {
         order: ByteOrder,
     ) -> Result<Vec<SymbolEntry>, FileParseError> {
         let ent_size = Self::size_of(class);
+        let table_size = count
+            .checked_mul(ent_size)
+            .ok_or(FileParseError::BufferOverflow)?;
+        let end = offset
+            .checked_add(table_size)
+            .ok_or(FileParseError::BufferOverflow)?;
+        buffer
+            .get(offset..end)
+            .ok_or(FileParseError::BufferOverflow)?;
         let mut symbols = Vec::with_capacity(count);
 
         for i in 0..count {
             let base = offset + i * ent_size;
-            if buffer.len() < base + ent_size {
-                return Err(FileParseError::BufferOverflow);
-            }
 
             let entry = match class {
                 ElfClass::Elf32 => SymbolEntry::Sym32(Sym32Fields {
@@ -218,5 +224,18 @@ impl SymbolTable {
     /// Resolves the name of `symbol` via the linked string table.
     pub fn name(&self, buffer: &[u8], symbol: &SymbolEntry) -> Result<String, FileParseError> {
         Ok(self.name_ref(buffer, symbol)?.into_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_symbol_count_beyond_buffer_before_allocating() {
+        assert!(matches!(
+            SymbolEntry::parse_table(&[], 0, usize::MAX, ElfClass::Elf64, ByteOrder::Little,),
+            Err(FileParseError::BufferOverflow)
+        ));
     }
 }

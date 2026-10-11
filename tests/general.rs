@@ -17,6 +17,24 @@ fn load_section_name_field() -> (Vec<u8>, Field<FixedBytes<8>>) {
 }
 
 #[test]
+fn byte_order_reads_reject_overflowing_offsets() {
+    for order in [ByteOrder::Little, ByteOrder::Big] {
+        assert!(matches!(
+            order.read_u16(&[], usize::MAX),
+            Err(FileParseError::BufferOverflow)
+        ));
+        assert!(matches!(
+            order.read_u32(&[], usize::MAX),
+            Err(FileParseError::BufferOverflow)
+        ));
+        assert!(matches!(
+            order.read_u64(&[], usize::MAX),
+            Err(FileParseError::BufferOverflow)
+        ));
+    }
+}
+
+#[test]
 fn test_field_u32_value_bounds() {
     let mut buffer = [0u8; 3];
     let mut field = Field::new(0u32, 0, 3);

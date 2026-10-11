@@ -185,3 +185,5 @@ and debug records without collecting tables. ELF entry views and Mach-O command
 and FAT views avoid temporary allocations. Borrowed name accessors preserve owned
 editing support. Version 1.2.0 changes relocation and import-descriptor access;
 see [the migration guide](docs/guide.md#migrating-to-120).
+
+Fuzzing harnesses, corpus generation, and crash replay are documented in [fuzz/README.md](fuzz/README.md).
