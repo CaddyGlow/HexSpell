@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 honggfuzz = "0.5"
-hexspell = { package = "caddy-hexspell", path = ".." }
+hexspell = { package = "caddy-hexspell", path = "..", features = ["write"] }
 
 [profile.release]
 debug = 1

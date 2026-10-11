@@ -24,8 +24,9 @@ back to disk when you need to patch an executable.
 - **Multi-format** — PE (Windows), ELF (Linux), and Mach-O (macOS) in one crate.
 - **Parse and patch** — read entry points, sections, imports, exports, and more; update headers and write the file back with `write_file`.
 - **Structural edits** — insert sections and load segments, sync layout, apply relocations.
-- **PE generation** (`pe-write` feature) — construct x86/x64 EXEs and DLLs from section bytes, with imports, exports, relocations, TLS, and resources.
-- **Resource editing** (`pe-write` feature) — edit lossless owned trees transactionally; helpers for manifests, strings, versions, and icons.
+- **PE generation** (`write` feature with `pe`) — construct x86/x64 EXEs and DLLs from section bytes, with imports, exports, relocations, TLS, and resources.
+- **Resource editing** (`write` feature with `pe`) — edit lossless owned trees transactionally; helpers for manifests, strings, versions, and icons.
+- **ELF and Mach-O writers** (`elf,write`, `macho,write`) — owned construction, checked layouts, scoped dynamic linking, TLS/unwind metadata and transactional custom-data/FAT edits; Mach-O uses external signing. See the [generation guide](docs/guide.md#elf-and-mach-o-generation-and-transactional-editing) and [validation matrix](docs/elf-macho-generation-validation.md).
 - **Lazy parsers** — imports, exports, TLS, exceptions, symbols, and other tables parsed on demand.
 - **Endianness-aware** — ELF and Mach-O byte order handled via `ByteOrder`.
 
@@ -33,7 +34,10 @@ See [`docs/coverage.md`](docs/coverage.md) for exactly what is modeled per forma
 See the [PE generation guide](docs/guide.md#pe-generation-and-resource-editing) and
 the `pe_hello`, `pe_dll`, and Windows `pe_dll_load` examples for construction and validation.
 Formats (`pe`, `elf`, `macho`) and the public helper interface (`common`) have
-independent default-enabled features. `pe-write` is opt-in and implies `pe`.
+independent default-enabled features. The opt-in `write` feature enables construction
+and editing for the selected formats without enabling any formats itself. Use
+`features = ["write"]` with defaults, or `default-features = false,
+features = ["elf", "write"]` for just the ELF writer with `no_std + alloc`.
 See [feature selection and 2.0 migration](docs/guide.md#features-and-migrating-to-20).
 
 ## Installation
@@ -138,6 +142,7 @@ More runnable examples and per-format walkthroughs live in the [user guide](docs
 - [User guide](docs/guide.md) — design principles, per-format examples, error handling.
 - [Layout accessors](docs/layout.md) — `field()` / `field_mut()` on ELF/Mach-O layout enums.
 - [Coverage matrix](docs/coverage.md) — what is modeled vs not, per format.
+- [ELF and Mach-O creation and editing plan](docs/elf-macho-generation-plan.md) — supported writer profiles, implementation milestones, and validation gates.
 - [Changelog](CHANGELOG.md) — notable changes per release.
 
 ## Contributing
@@ -158,7 +163,7 @@ Disable default features for `no_std + alloc`:
 
 ```toml
 [dependencies]
-hexspell = { git = "https://github.com/CaddyGlow/HexSpell", default-features = false }
+hexspell = { git = "https://github.com/CaddyGlow/HexSpell", default-features = false, features = ["pe", "elf", "macho", "common"] }
 ```
 
 In this mode, PE, ELF and Mach-O parsing from buffers, field edits, layout

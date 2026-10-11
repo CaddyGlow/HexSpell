@@ -1,6 +1,6 @@
 # PE generation and resource editing implementation plan
 
-Status: implementation completed in the working tree under the opt-in `pe-write`
+Status: implementation completed in the working tree under the opt-in `pe,write`
 feature. The steps below retain their planning rationale; current API names and
 feature selection are in [the guide](guide.md#pe-generation-and-resource-editing).
 Runtime and structural verification results are recorded in
@@ -400,7 +400,7 @@ nix develop --no-write-lock-file "path:$HOME/projects-caddy/nix-dev-shells/defau
 nix develop --no-write-lock-file "path:$HOME/projects-caddy/nix-dev-shells/default" -c cargo test
 nix develop --no-write-lock-file "path:$HOME/projects-caddy/nix-dev-shells/default" -c cargo clippy --all-features --all-targets -- -D warnings
 nix develop --no-write-lock-file "path:$HOME/projects-caddy/nix-dev-shells/default" -c cargo test --all-features
-nix develop --no-write-lock-file "path:$HOME/projects-caddy/nix-dev-shells/default" -c cargo test --no-default-features --features pe,elf,macho,common,pe-write --test no_std
+nix develop --no-write-lock-file "path:$HOME/projects-caddy/nix-dev-shells/default" -c cargo test --no-default-features --features pe,elf,macho,common,pe,write --test no_std
 ```
 
 Extend `tests/no_std.rs` with in-memory generation and resource editing as available.

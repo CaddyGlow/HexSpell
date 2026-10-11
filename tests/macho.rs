@@ -732,9 +732,80 @@ fn test_macho_llvm_sections() {
 #[test]
 fn test_macho_export_trie_rejects_cycles_without_recursing() {
     // Root has one edge whose child offset points back to the root.
-    let cyclic = [0, 1, b'a', 0];
+    let cyclic = [0, 1, b'a', 0, 0];
     assert!(matches!(
         macho::dyld::decode_export_trie(&cyclic),
         Err(hexspell::errors::FileParseError::InvalidFileFormat)
     ));
+}
+
+#[test]
+fn export_trie_reads_nul_terminated_edges_and_rejects_truncation() {
+    let trie = [0, 1, b'_', b'f', b'o', b'o', 0, 8, 2, 0, 42, 0];
+    let exports = macho::dyld::decode_export_trie(&trie).unwrap();
+    assert_eq!(exports[0].name, "_foo");
+    assert_eq!(exports[0].address, Some(42));
+    assert!(macho::dyld::decode_export_trie(&[0, 1, b'x']).is_err());
+    assert!(macho::dyld::decode_export_trie(&[0, 1, b'x', 0, 99]).is_err());
+}
+
+#[test]
+fn chained_pointer_words_decode_independent_bit_layouts() {
+    use macho::dyld::{decode_chained_pointer, ChainedPointer};
+    assert_eq!(
+        decode_chained_pointer((1 << 63) | (3 << 51) | (255 << 24) | 12).unwrap(),
+        ChainedPointer::Bind {
+            ordinal: 12,
+            addend: 255,
+            next: 12
+        }
+    );
+    assert_eq!(
+        decode_chained_pointer((2 << 51) | (0xabu64 << 36) | 42).unwrap(),
+        ChainedPointer::Rebase {
+            target: 42,
+            high8: 0xab,
+            next: 8
+        }
+    );
+    assert!(decode_chained_pointer((1 << 63) | (1 << 32)).is_err());
+    assert!(decode_chained_pointer(1 << 44).is_err());
+}
+
+#[test]
+fn chained_fixups_bound_repeated_import_names() {
+    fn shared_name_blob(count: usize, length: usize) -> Vec<u8> {
+        let names = 32 + count * 4;
+        let mut bytes = vec![0; names + length + 1];
+        for (at, value) in [(4, 28), (8, 32), (12, names), (16, count), (20, 1)] {
+            bytes[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
+        }
+        bytes[names..names + length].fill(b'x');
+        bytes
+    }
+    let ordinary = macho::dyld::decode_chained_fixups(&shared_name_blob(16, 8)).unwrap();
+    assert_eq!(ordinary.imports.len(), 16);
+    assert!(ordinary.imports.iter().all(|i| i.name == "xxxxxxxx"));
+    // All records alias one long string: 12 KiB must not allocate 8 MiB of names.
+    assert!(macho::dyld::decode_chained_fixups(&shared_name_blob(1024, 8192)).is_err());
+}
+
+#[test]
+fn chained_fixups_bound_aliased_page_tables() {
+    let count = 128usize;
+    let pages = 1024usize;
+    let record = 32 + count * 4;
+    let size = 22 + pages * 2;
+    let mut bytes = vec![0; record + size];
+    for (at, value) in [(4, 28), (20, 1), (28, count), (record, size)] {
+        bytes[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
+    }
+    for i in 0..count {
+        bytes[32 + i * 4..36 + i * 4].copy_from_slice(&((record - 28) as u32).to_le_bytes());
+    }
+    bytes[record + 4..record + 6].copy_from_slice(&4096u16.to_le_bytes());
+    bytes[record + 6..record + 8].copy_from_slice(&6u16.to_le_bytes());
+    bytes[record + 20..record + 22].copy_from_slice(&(pages as u16).to_le_bytes());
+    bytes[record + 22..].fill(0xff);
+    assert!(macho::dyld::decode_chained_fixups(&bytes).is_err());
 }

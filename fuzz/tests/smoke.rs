@@ -58,3 +58,16 @@ fn synthetic_seeds_cover_word_sizes_byte_orders_and_fat_slices() {
         roundtrip(&bytes);
     }
 }
+
+#[test]
+fn bounded_builders_and_editors_cover_payloads_and_alignments() {
+    for selector in 0..=255u8 {
+        let mut data = vec![selector; usize::from(selector)];
+        if data.is_empty() {
+            data.push(selector);
+        }
+        hexspell_fuzz::generation(&data);
+    }
+    hexspell_fuzz::generation(&[]);
+    assert!(hexspell_fuzz::run("generation", &[1, 2, 3]).is_ok());
+}

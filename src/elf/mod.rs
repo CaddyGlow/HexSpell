@@ -16,7 +16,11 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 
 pub mod archive;
+#[cfg(feature = "write")]
+pub mod build;
 pub mod dynamic;
+#[cfg(feature = "write")]
+pub mod edit;
 pub mod group;
 pub mod hash;
 pub mod header;
@@ -66,7 +70,7 @@ impl<B: core::ops::Deref<Target = [u8]>> ELF<B> {
             .section_headers
             .get(index)
             .ok_or(errors::FileParseError::BufferOverflow)?;
-        let strndx = self.header.sh_strndx.value as usize;
+        let strndx = self.section_name_table_index()?;
         let strtab = self
             .section_headers
             .get(strndx)
@@ -83,6 +87,24 @@ impl<B: core::ops::Deref<Target = [u8]>> ELF<B> {
             .get(start..end)
             .ok_or(errors::FileParseError::BufferOverflow)?;
         crate::strings::read_c_string_ref(bytes, sh.sh_name() as usize)
+    }
+
+    /// Resolves the section-name table index, including `SHN_XINDEX` in section zero.
+    /// The header field itself retains its exact on-disk escape value.
+    pub fn section_name_table_index(&self) -> Result<usize, errors::FileParseError> {
+        if self.header.sh_strndx.value != 0xffff {
+            return Ok(self.header.sh_strndx.value as usize);
+        }
+        let null = self
+            .section_headers
+            .first()
+            .ok_or(errors::FileParseError::InvalidFileFormat)?;
+        let index =
+            usize::try_from(null.sh_link()).map_err(|_| errors::FileParseError::ValueTooLarge)?;
+        if index < 0xff00 {
+            return Err(errors::FileParseError::InvalidFileFormat);
+        }
+        Ok(index)
     }
 
     /// Returns the raw on-disk bytes of section `index` (`sh_offset` .. `sh_offset + sh_size`).
@@ -470,34 +492,239 @@ impl<B: core::ops::Deref<Target = [u8]>> ELF<B> {
         self.parse_symbol_section(section::SHT_SYMTAB)
     }
 
-    /// Parses the dynamic symbol table (`.dynsym`), if present.
+    /// Parses dynamic symbols from `SHT_DYNSYM`, or from `PT_DYNAMIC` when absent.
+    /// The program-header path requires a bounded System V or GNU hash table
+    /// to determine the symbol count; all tables must fit file-backed `PT_LOAD` ranges.
     pub fn dynamic_symbols(&self) -> Result<Option<symbol::SymbolTable>, errors::FileParseError> {
-        self.parse_symbol_section(section::SHT_DYNSYM)
+        use dynamic::*;
+        if let Some(table) = self.parse_symbol_section(section::SHT_DYNSYM)? {
+            return Ok(Some(table));
+        }
+        let Some(dynamic) = self.dynamic()? else {
+            return Ok(None);
+        };
+        let value = |tag| -> Result<Option<u64>, errors::FileParseError> {
+            let mut found = dynamic.entries.iter().filter(|entry| entry.tag() == tag);
+            let result = found.next().map(|entry| entry.value());
+            if found.next().is_some() {
+                return Err(errors::FileParseError::InvalidFileFormat);
+            }
+            Ok(result)
+        };
+        let Some(symbol_va) = value(DT_SYMTAB)? else {
+            return Ok(None);
+        };
+        let class = self.header.class()?;
+        let order = self.byte_order()?;
+        let entry_size = symbol::SymbolEntry::size_of(class);
+        if value(DT_SYMENT)? != Some(entry_size as u64) {
+            return Err(errors::FileParseError::InvalidFileFormat);
+        }
+        let string_va = value(DT_STRTAB)?.ok_or(errors::FileParseError::InvalidFileFormat)?;
+        let string_size = value(DT_STRSZ)?.ok_or(errors::FileParseError::InvalidFileFormat)?;
+        let strings = self.dynamic_file_range(string_va, string_size)?;
+        let count = if let Some(va) = value(DT_HASH)? {
+            let header = self.dynamic_file_range(va, 8)?;
+            let buckets = u64::from(order.read_u32(&self.buffer, header.start)?);
+            let count = u64::from(order.read_u32(&self.buffer, header.start + 4)?);
+            if buckets == 0 || count == 0 {
+                return Err(errors::FileParseError::InvalidFileFormat);
+            }
+            let size = buckets
+                .checked_add(count)
+                .and_then(|n| n.checked_mul(4))
+                .and_then(|n| n.checked_add(8))
+                .ok_or(errors::FileParseError::BufferOverflow)?;
+            let table = self.dynamic_file_range(va, size)?;
+            for offset in (table.start + 8..table.end).step_by(4) {
+                if u64::from(order.read_u32(&self.buffer, offset)?) >= count {
+                    return Err(errors::FileParseError::InvalidFileFormat);
+                }
+            }
+            count
+        } else if let Some(va) = value(DT_GNU_HASH)? {
+            let header = self.dynamic_file_range(va, 16)?;
+            let buckets = u64::from(order.read_u32(&self.buffer, header.start)?);
+            let first_symbol = u64::from(order.read_u32(&self.buffer, header.start + 4)?);
+            let bloom_words = u64::from(order.read_u32(&self.buffer, header.start + 8)?);
+            if buckets == 0 || bloom_words == 0 || !bloom_words.is_power_of_two() {
+                return Err(errors::FileParseError::InvalidFileFormat);
+            }
+            let word_size = if class == ElfClass::Elf64 { 8 } else { 4 };
+            let bucket_offset = bloom_words
+                .checked_mul(word_size)
+                .and_then(|n| n.checked_add(16))
+                .ok_or(errors::FileParseError::BufferOverflow)?;
+            let chain_offset = buckets
+                .checked_mul(4)
+                .and_then(|n| n.checked_add(bucket_offset))
+                .ok_or(errors::FileParseError::BufferOverflow)?;
+            let table = self.dynamic_file_range(va, chain_offset)?;
+            let bucket_start = table
+                .start
+                .checked_add(
+                    usize::try_from(bucket_offset)
+                        .map_err(|_| errors::FileParseError::BufferOverflow)?,
+                )
+                .ok_or(errors::FileParseError::BufferOverflow)?;
+            let mut highest = 0;
+            for offset in (bucket_start..table.end).step_by(4) {
+                let bucket = u64::from(order.read_u32(&self.buffer, offset)?);
+                if bucket != 0 && bucket < first_symbol {
+                    return Err(errors::FileParseError::InvalidFileFormat);
+                }
+                highest = highest.max(bucket);
+            }
+            if highest == 0 {
+                first_symbol
+            } else {
+                let mut symbol = highest;
+                loop {
+                    let offset = symbol
+                        .checked_sub(first_symbol)
+                        .and_then(|n| n.checked_mul(4))
+                        .and_then(|n| n.checked_add(chain_offset))
+                        .and_then(|n| n.checked_add(va))
+                        .ok_or(errors::FileParseError::BufferOverflow)?;
+                    let chain_size = offset
+                        .checked_sub(va)
+                        .and_then(|n| n.checked_add(4))
+                        .ok_or(errors::FileParseError::BufferOverflow)?;
+                    let chain = self.dynamic_file_range(va, chain_size)?;
+                    symbol = symbol
+                        .checked_add(1)
+                        .ok_or(errors::FileParseError::BufferOverflow)?;
+                    if order.read_u32(&self.buffer, chain.end - 4)? & 1 != 0 {
+                        break symbol;
+                    }
+                }
+            }
+        } else {
+            return Err(errors::FileParseError::UnsupportedFeature(
+                "PT_DYNAMIC symbols require DT_HASH or DT_GNU_HASH for a bounded count".into(),
+            ));
+        };
+        let byte_size = count
+            .checked_mul(entry_size as u64)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        let symbols_range = self.dynamic_file_range(symbol_va, byte_size)?;
+        let count = usize::try_from(count).map_err(|_| errors::FileParseError::BufferOverflow)?;
+        let symbols = symbol::SymbolEntry::parse_table(
+            &self.buffer,
+            symbols_range.start,
+            count,
+            class,
+            order,
+        )?;
+        let string_data = &self.buffer[strings.clone()];
+        for symbol in &symbols {
+            let tail = string_data
+                .get(symbol.st_name() as usize..)
+                .ok_or(errors::FileParseError::BufferOverflow)?;
+            if !tail.contains(&0) {
+                return Err(errors::FileParseError::InvalidFileFormat);
+            }
+        }
+        Ok(Some(symbol::SymbolTable {
+            offset: symbols_range.start,
+            strtab_offset: strings.start,
+            symbols,
+        }))
     }
 
-    /// Parses the dynamic linking table (`.dynamic`), if present.
+    // A complete table must fit one file-backed mapping. Do not map through BSS
+    // or combine discontiguous segments; reject ambiguous overlapping mappings.
+    fn dynamic_file_range(
+        &self,
+        va: u64,
+        size: u64,
+    ) -> Result<core::ops::Range<usize>, errors::FileParseError> {
+        let mut result = None;
+        for ph in &self.program_headers {
+            if ph.p_type() != program::PT_LOAD {
+                continue;
+            }
+            let Some(delta) = va.checked_sub(ph.p_vaddr()) else {
+                continue;
+            };
+            if delta > ph.p_filesz() || size > ph.p_filesz() - delta {
+                continue;
+            }
+            let offset = ph
+                .p_offset()
+                .checked_add(delta)
+                .ok_or(errors::FileParseError::BufferOverflow)?;
+            let end = offset
+                .checked_add(size)
+                .ok_or(errors::FileParseError::BufferOverflow)?;
+            let offset =
+                usize::try_from(offset).map_err(|_| errors::FileParseError::BufferOverflow)?;
+            let end = usize::try_from(end).map_err(|_| errors::FileParseError::BufferOverflow)?;
+            if end > self.buffer.len() {
+                return Err(errors::FileParseError::BufferOverflow);
+            }
+            if result.is_some() {
+                return Err(errors::FileParseError::InvalidFileFormat);
+            }
+            result = Some(offset..end);
+        }
+        result.ok_or(errors::FileParseError::BufferOverflow)
+    }
+
+    /// Parses the dynamic linking table from `SHT_DYNAMIC`, or `PT_DYNAMIC` when absent.
+    /// The segment path validates file bounds, whole entries and a `DT_NULL` terminator.
     pub fn dynamic(&self) -> Result<Option<dynamic::DynamicTable>, errors::FileParseError> {
         let order = self.byte_order()?;
         let class = self.header.class()?;
-
-        let sh = match self
+        if let Some(sh) = self
             .section_headers
             .iter()
             .find(|sh| sh.sh_type() == section::SHT_DYNAMIC)
         {
-            Some(sh) => sh,
-            None => return Ok(None),
+            return Ok(Some(dynamic::DynamicTable::parse(
+                &self.buffer,
+                sh.sh_offset() as usize,
+                sh.sh_size() as usize,
+                class,
+                order,
+            )?));
+        }
+        let mut segments = self
+            .program_headers
+            .iter()
+            .filter(|ph| ph.p_type() == program::PT_DYNAMIC);
+        let Some(segment) = segments.next() else {
+            return Ok(None);
         };
-
-        let offset = sh.sh_offset() as usize;
-        let size = sh.sh_size() as usize;
-        Ok(Some(dynamic::DynamicTable::parse(
-            &self.buffer,
-            offset,
-            size,
-            class,
-            order,
-        )?))
+        if segments.next().is_some() {
+            return Err(errors::FileParseError::InvalidFileFormat);
+        }
+        let offset = usize::try_from(segment.p_offset())
+            .map_err(|_| errors::FileParseError::BufferOverflow)?;
+        let size = usize::try_from(segment.p_filesz())
+            .map_err(|_| errors::FileParseError::BufferOverflow)?;
+        let entry_size = if class == ElfClass::Elf64 { 16 } else { 8 };
+        let end = offset
+            .checked_add(size)
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        if end > self.buffer.len() {
+            return Err(errors::FileParseError::BufferOverflow);
+        }
+        if size == 0 || size % entry_size != 0 {
+            return Err(errors::FileParseError::InvalidFileFormat);
+        }
+        if self
+            .dynamic_file_range(segment.p_vaddr(), segment.p_filesz())?
+            .start
+            != offset
+        {
+            return Err(errors::FileParseError::InvalidFileFormat);
+        }
+        let table = dynamic::DynamicTable::parse(&self.buffer, offset, size, class, order)?;
+        if table.entries.len() == size / entry_size {
+            return Err(errors::FileParseError::InvalidFileFormat);
+        }
+        Ok(Some(table))
     }
 
     /// Parses every relocation section (`SHT_REL` / `SHT_RELA`) in file order.
@@ -729,12 +956,15 @@ impl<B: core::ops::Deref<Target = [u8]>> ELF<B> {
         if header.sh_num.value != 0 {
             return Ok(header.sh_num.value as usize);
         }
-        if header.sh_off.value == 0 || header.sh_ent_size.value == 0 {
+        if header.sh_off.value == 0 {
             return Ok(0);
+        }
+        if header.sh_ent_size.value == 0 {
+            return Err(errors::FileParseError::InvalidFileFormat);
         }
         let base = usize::try_from(header.sh_off.value)
             .map_err(|_| errors::FileParseError::BufferOverflow)?;
-        match class {
+        let count = match class {
             ElfClass::Elf32 => Ok(order.read_u32(
                 buffer,
                 base.checked_add(20)
@@ -748,7 +978,11 @@ impl<B: core::ops::Deref<Target = [u8]>> ELF<B> {
                 )?,
             )
             .map_err(|_| errors::FileParseError::BufferOverflow),
+        }?;
+        if count < 0xff00 {
+            return Err(errors::FileParseError::InvalidFileFormat);
         }
+        Ok(count)
     }
 }
 
@@ -1191,7 +1425,25 @@ impl ELF {
         class: ElfClass,
         order: ByteOrder,
     ) -> Result<(), errors::FileParseError> {
-        if count <= u16::MAX as usize && self.header.sh_num.value != 0 {
+        if count < 0xff00 {
+            if self.header.sh_off.value != 0 {
+                let base = usize::try_from(self.header.sh_off.value)
+                    .map_err(|_| errors::FileParseError::BufferOverflow)?;
+                match class {
+                    ElfClass::Elf32 => order.write_u32(
+                        &mut self.buffer,
+                        base.checked_add(20)
+                            .ok_or(errors::FileParseError::BufferOverflow)?,
+                        0,
+                    ),
+                    ElfClass::Elf64 => order.write_u64(
+                        &mut self.buffer,
+                        base.checked_add(32)
+                            .ok_or(errors::FileParseError::BufferOverflow)?,
+                        0,
+                    ),
+                }
+            }
             let value = count as u16;
             self.header.sh_num.value = value;
             match class {
@@ -1294,11 +1546,53 @@ impl<B: core::ops::Deref<Target = [u8]>> ELF<B> {
         let byte_order = header.ei_data.value;
         let order = ByteOrder::from_ei_data(byte_order)?;
         let class = header.class()?;
+        let program_count = if header.ph_num.value == 0xffff {
+            let base = usize::try_from(header.sh_off.value)
+                .map_err(|_| errors::FileParseError::BufferOverflow)?;
+            let (minimum, info_offset) = match class {
+                ElfClass::Elf32 => (40, 28),
+                ElfClass::Elf64 => (64, 44),
+            };
+            if base == 0 || usize::from(header.sh_ent_size.value) < minimum {
+                return Err(errors::FileParseError::InvalidFileFormat);
+            }
+            usize::try_from(
+                order.read_u32(
+                    &buffer,
+                    base.checked_add(info_offset)
+                        .ok_or(errors::FileParseError::BufferOverflow)?,
+                )?,
+            )
+            .map_err(|_| errors::FileParseError::ValueTooLarge)?
+        } else {
+            usize::from(header.ph_num.value)
+        };
+        if header.ph_num.value == 0xffff && program_count < 0xffff {
+            return Err(errors::FileParseError::InvalidFileFormat);
+        }
+        if header.sh_strndx.value == 0xffff {
+            let base = usize::try_from(header.sh_off.value)
+                .map_err(|_| errors::FileParseError::BufferOverflow)?;
+            let (minimum, link_offset) = match class {
+                ElfClass::Elf32 => (40, 24),
+                ElfClass::Elf64 => (64, 40),
+            };
+            if base == 0
+                || usize::from(header.sh_ent_size.value) < minimum
+                || order.read_u32(
+                    &buffer,
+                    base.checked_add(link_offset)
+                        .ok_or(errors::FileParseError::BufferOverflow)?,
+                )? < 0xff00
+            {
+                return Err(errors::FileParseError::InvalidFileFormat);
+            }
+        }
         let program_headers = ProgramHeaderEntry::parse_program_headers(
             &buffer,
             header.ph_off.value,
             header.ph_ent_size.value,
-            header.ph_num.value,
+            program_count,
             class,
             order,
         )?;
@@ -1345,4 +1639,44 @@ struct ProgramHeaderSpec {
     filesz: u64,
     memsz: u64,
     align: u64,
+}
+
+#[cfg(test)]
+mod extended_count_tests {
+    use super::*;
+    #[test]
+    fn section_count_encoding_crosses_reserved_boundary_in_both_directions() {
+        let mut bytes = alloc::vec![0u8; 64 + 0xff00 * 64];
+        bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        let order = ByteOrder::Little;
+        order.write_u16(&mut bytes, 52, 64);
+        order.write_u64(&mut bytes, 40, 64);
+        order.write_u16(&mut bytes, 58, 64);
+        order.write_u16(&mut bytes, 60, 1);
+        let mut image = ELF::from_buffer(bytes).unwrap();
+        image
+            .write_section_count(0xff00, ElfClass::Elf64, order)
+            .unwrap();
+        assert_eq!(order.read_u16(&image.buffer, 60).unwrap(), 0);
+        assert_eq!(order.read_u64(&image.buffer, 96).unwrap(), 0xff00);
+        assert_eq!(
+            ELF::from_slice(&image.buffer)
+                .unwrap()
+                .section_headers
+                .len(),
+            0xff00
+        );
+        image
+            .write_section_count(2, ElfClass::Elf64, order)
+            .unwrap();
+        assert_eq!(order.read_u16(&image.buffer, 60).unwrap(), 2);
+        assert_eq!(order.read_u64(&image.buffer, 96).unwrap(), 0);
+        assert_eq!(
+            ELF::from_slice(&image.buffer)
+                .unwrap()
+                .section_headers
+                .len(),
+            2
+        );
+    }
 }

@@ -1,4 +1,4 @@
-#![cfg(feature = "pe-write")]
+#![cfg(all(feature = "pe", feature = "write"))]
 
 use hexspell::pe::{build::*, header::ImageBase, PE};
 fn builder(target: Target) -> (PeBuilder, SectionId, SymbolId) {

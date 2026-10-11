@@ -617,12 +617,12 @@ fn elf_header_view_checks_extended_counts_and_entry_extents() {
     bytes[40..48].copy_from_slice(&64u64.to_le_bytes());
     bytes[56..58].copy_from_slice(&0xffffu16.to_le_bytes());
     bytes[58..60].copy_from_slice(&64u16.to_le_bytes());
-    bytes[96..104].copy_from_slice(&1u64.to_le_bytes()); // section zero sh_size
-    bytes[108..112].copy_from_slice(&3u32.to_le_bytes()); // section zero sh_info
+    bytes[96..104].copy_from_slice(&0xff00u64.to_le_bytes()); // canonical extended sh_size
+    bytes[108..112].copy_from_slice(&0xffffu32.to_le_bytes()); // canonical extended sh_info
     let view = ElfHeaders::parse(&bytes).unwrap();
-    assert_eq!(view.section_count().unwrap(), 1);
-    assert_eq!(view.program_count().unwrap(), 3);
-    assert_eq!(view.section(0).unwrap().sh_size(), 1);
+    assert_eq!(view.section_count().unwrap(), 0xff00);
+    assert_eq!(view.program_count().unwrap(), 0xffff);
+    assert_eq!(view.section(0).unwrap().sh_size(), 0xff00);
     assert!(view.section(1).is_err());
     bytes[58..60].copy_from_slice(&1u16.to_le_bytes());
     assert!(ElfHeaders::parse(&bytes).unwrap().section_count().is_err());

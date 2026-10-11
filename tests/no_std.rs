@@ -62,7 +62,7 @@ fn errors_and_fields_use_core_traits() {
 }
 
 #[test]
-#[cfg(feature = "pe-write")]
+#[cfg(all(feature = "pe", feature = "write"))]
 fn generated_images_use_only_in_memory_apis() {
     use hexspell::pe::{
         build::{ImageKind, PeBuilder, SectionSpec, Target},

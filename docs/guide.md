@@ -313,12 +313,12 @@ are total requested bytes rather than peak live memory.
 
 ## PE generation and resource editing
 
-Enable the opt-in `pe-write` feature (disabled by default). It adds no dependencies
+Enable the opt-in `write` feature with `pe` (disabled by default). It adds no dependencies
 and works with `no_std` plus `alloc`; `std` is needed only for file APIs/examples:
 
 ```toml
 [dependencies]
-caddy-hexspell = { version = "2.0", features = ["pe-write"] }
+caddy-hexspell = { version = "2.0", features = ["pe", "write"] }
 ```
 
 `pe::build` constructs x86 PE32 and x64 PE32+ images from owned section bytes,
@@ -407,11 +407,11 @@ shared. Cursor, menu, dialog, and bitmap resources remain opaque payloads.
 Generate complete GUI executables and callable DLLs on Linux:
 
 ```sh
-cargo run --features pe-write --example pe_hello -- x86 hello-x86.exe
-cargo run --features pe-write --example pe_hello -- x64 hello-x64.exe
-cargo run --features pe-write --example pe_dll -- x86 demo-x86.dll
-cargo run --features pe-write --example pe_dll -- x64 demo-x64.dll
-cargo run --features pe-write --example pe_resources -- hello-x64.exe edited-x64.exe preserve
+cargo run --features pe,write --example pe_hello -- x86 hello-x86.exe
+cargo run --features pe,write --example pe_hello -- x64 hello-x64.exe
+cargo run --features pe,write --example pe_dll -- x86 demo-x86.dll
+cargo run --features pe,write --example pe_dll -- x64 demo-x64.dll
+cargo run --features pe,write --example pe_resources -- hello-x64.exe edited-x64.exe preserve
 ```
 
 On Windows, run `pe_dll_load` built for the DLL's architecture with its absolute
@@ -430,7 +430,7 @@ and Windows runtime checks, including negative controls and forced relocation.
 | `elf` | Yes | ELF parsing and editing |
 | `macho` | Yes | Mach-O parsing and editing |
 | `common` | Yes | Public `reloc`, `strings`, `validation`, and `write` helpers; format-specific helpers follow enabled formats |
-| `pe-write` | No | New PE construction, owned resource editing, and typed resource codecs; implies `pe` |
+| `write` | No | Construction and transactional editing for enabled formats; does not enable `pe`, `elf`, or `macho` itself |
 
 Core `field`, `errors`, and `utils` remain available in every configuration. Parsers
 retain the private string-reading machinery they need when `common` is disabled.
@@ -445,10 +445,193 @@ existing formats and helpers. Examples of narrower configurations:
 # PE parser only, no standard library or public common helper interface.
 caddy-hexspell = { version = "2.0", default-features = false, features = ["pe"] }
 # In-memory PE generation and resource editing only.
-caddy-hexspell = { version = "2.0", default-features = false, features = ["pe-write"] }
+caddy-hexspell = { version = "2.0", default-features = false, features = ["pe", "write"] }
 # Shared fields plus generic helpers, with no format parser.
 caddy-hexspell = { version = "2.0", default-features = false, features = ["common"] }
 ```
 
 Choose one dependency declaration. Feature unification is additive: another
 dependency may enable additional formats for the same package in the build graph.
+
+## ELF and Mach-O generation and transactional editing
+
+Enable `write` together with `elf` or `macho` to construct images from owned specifications.
+The `write` feature does not enable parsers and adds no runtime dependencies. Both writers work with `no_std + alloc`. Builder handles contain
+`Rc` ownership tokens, so builders and handles are neither `Send` nor `Sync`.
+Foreign handles are rejected. Builders are reusable after failed builds and do
+not implement ambiguous cloning.
+
+`elf::build::ElfBuilder` targets Linux AMD64 ELF64 little-endian images.
+Segments have explicit permissions; allocated sections belong to segments,
+while `add_section(None, ...)` creates file-only metadata. The writer reserves
+program headers before placement, emits a nonexecutable stack, separates zero-fill
+from file data, and optionally omits section headers. Named static symbols and
+checked `Absolute64`, `Absolute32` and `PcRelative32` fixups resolve before output.
+PC-relative fields use the address immediately after the four-byte field as origin.
+
+For explicit structural layouts, `elf::build::layout::serialize_layout` accepts
+`HeaderSpec`, caller-positioned payload bytes, `ProgramSpec` and
+`SectionHeaderSpec` slices. It supports ELF32/64 and either byte order, checks
+class-width conversions and emits extended program/section counts and string-table
+indices through section-zero escape encodings. It does not establish a runnable
+CPU ABI, synthesize linkage or relocate caller payloads; use `ElfBuilder` for the
+native Linux AMD64 profile.
+
+Select `ImageKind::Pie` or `ImageKind::SharedObject` with `set_image_kind` for the
+scoped Linux dynamic loader profile. PIE requires `set_interpreter` with an
+explicit loader path. Global and weak symbols become dynamic exports;
+`add_import_slot(library, name)` returns the symbol for an eagerly resolved GOT
+slot, which caller-provided code addresses explicitly. `set_soname` and
+`set_runpath` add owned dynamic strings. SysV hash tables and RELA records support
+GLOB_DAT imports and writable Absolute64 pointer relocations. Default-visibility
+global/weak pointer targets retain symbol preemption through `R_X86_64_64`; local,
+hidden and protected targets use relative relocations. Absolute32 fixups
+and read-only runtime relocation targets are rejected in dynamic images.
+`add_versioned_import_slot` records dependency symbol versions, while
+`set_symbol_version` assigns default export versions and `set_symbol_visibility`
+sets ELF visibility. PLT stubs, lazy binding, IFUNC, copy and packed relocations
+remain outside this profile.
+
+Generated lifecycle pointers follow the same binding rules: default-visible global
+and weak callbacks remain preemptible; local, hidden and protected callbacks use
+relative relocations.
+
+Shared objects support ordered `add_initializer` and reverse-order
+`add_finalizer` arrays. PIE lifecycle arrays are rejected because a caller-provided
+CRT must drive them. `add_tls_template` and `add_tls_address_slot` implement Linux
+AMD64 general-dynamic TLS through `__tls_get_addr`; each thread owns its template
+copy. `add_eh_frame` accepts a scoped version-1 `zR` CIE and caller-provided FDE/CFI
+records, patches PC-relative function pointers and emits `PT_GNU_EH_FRAME`.
+Personality functions, LSDA, exception-handler synthesis and other TLS models
+are unsupported. See `elf_shared` and the native loader for complete examples.
+
+```rust
+# #[cfg(all(feature = "elf", feature = "write"))] {
+use hexspell::elf::build::{Binding, ElfBuilder, SectionSpec, SegmentSpec, Target};
+let mut builder = ElfBuilder::new(Target::LinuxX86_64);
+let text = builder.add_segment(SegmentSpec::RX)?;
+let section = builder.add_section(Some(&text), SectionSpec::new(".text",
+    vec![0xb8, 60, 0, 0, 0, 0x31, 0xff, 0x0f, 0x05]))?;
+let entry = builder.define_symbol("_start", &section, 0, 9, Binding::Global)?;
+builder.set_entry(&entry)?;
+let (elf, layout) = builder.build_with_layout()?;
+assert_eq!(elf.header.entry.value, layout.entry);
+# }
+# Ok::<(), hexspell::errors::FileParseError>(())
+```
+
+`macho::build::MachOBuilder` produces unsigned thin 64-bit little-endian images
+for `Target::X86_64` or `Target::Arm64`, with an explicit macOS `Version`.
+`enable_dyld` selects the macOS 13+ runtime profile; it requires a first `__TEXT`
+segment with read/execute permissions and an executable entry or dylib install
+name. `new_dylib` creates an `MH_DYLIB` specification. `add_dependency` assigns
+stable one-based dylib ordinals; `add_rpath` emits search paths and `add_import`
+binds an initialized, writable, eight-byte-aligned slot to a dependency symbol.
+Defined symbols become exports through an ASCII radix trie. The writer emits
+link-edit tables, deterministic UUIDs and modern `DYLD_CHAINED_PTR_64_OFFSET`
+chained fixups. Writable aligned `Va64` pointers receive runtime rebases.
+
+Mach-O fixups support `Va64`, `PcRel32`, `Rel32 { origin }`, `Arm64Branch26`,
+`Arm64Page21` (ADRP), and `Arm64PageOffset12` (unshifted ADD immediate).
+Their instruction, alignment and signed-range constraints are checked. No branch
+veneers, arm64e authenticated pointers or legacy runtime binding encoders are
+synthesized. Without `enable_dyld`, the builder provides structural output with
+build-time addresses; that output does not claim runtime rebasing.
+
+`add_initializers` emits ordered loader pointer arrays. `add_terminators` generates
+an initializer thunk that registers callbacks through libSystem's `__cxa_atexit`;
+callbacks run in reverse registration order. The builder requires an explicit
+libSystem dependency for this registration.
+`add_thread_local` provides one initialized TLV template and an Apple three-word
+`__tlv_bootstrap` descriptor. It returns the descriptor section; caller code uses
+Apple's TLV calling convention. Dyld pins images with TLV descriptors, so their
+terminators are validated at process exit rather than ordinary `dlclose`.
+`add_unwind` accepts caller-encoded `__TEXT,__eh_frame` records and validates
+record lengths. The caller supplies correct CIE/FDE encodings, CFI instructions
+and relative `PcRel32` fixups. Compact-unwind synthesis, personalities/LSDA and
+additional TLV models are outside the tested profile.
+
+Output remains unsigned. On macOS, run `codesign --force --sign - --timestamp=none IMAGE`, verify it, and reparse the signed result before execution. The acceptance
+harness performs those steps and uses `otool`/`dyld_info` independently. The existing
+FAT writer packages independently built thin images.
+
+Both `build_with_layout` methods return the ordinary parsed image plus placement
+information. Only the reparsed fields have actual on-disk offsets. Layout reports
+distinguish file locations from virtual addresses and virtual-only storage.
+Writers reject writable executable segments, foreign handles, unsupported storage
+and arithmetic overflow instead of silently adjusting requests.
+
+`elf::edit::ElfEdit` and `macho::edit::MachOEdit` edit owned source images through
+an isolated candidate and replace the source only after successful validation and
+reparsing. Dropping a session or failing commit preserves source bytes and cached
+fields. Fixed-capacity replacement zero pads shorter data. Every supported edit
+preserves existing mapped virtual addresses; neither session promises arbitrary
+executable relayout, compaction or pointer discovery by scanning code.
+
+ELF custom sections must be isolated nonallocated PROGBITS data. Use
+`replace_custom_section` within capacity, `grow_custom_section` to append a new
+payload, `add_custom_section` to append data and rebuild the section-name/header
+tables, or `remove_custom_section` to clear an unreferenced section while retaining
+all indices. Growth supports power-of-two alignment up to 4096 bytes. Section
+links, relocation targets, symbols and supported table consumers are inventoried;
+unknown consumers reject structural edits. `rename_custom_section` uses isolated
+section-name capacity. These edits support ELF32/64 and either byte order even
+though the builder targets ELF64 little endian.
+
+`add_note_section` and `replace_note_section` accept complete caller-owned,
+nonallocated note records; loader-owned notes are rejected. Build-ID policies are
+`Reject` by default, `PreserveStale`, or `Remove`. Removal clears GNU build-ID note
+identity without moving subsequent records; it does not generate a replacement ID.
+Reports expose overwritten and moved file ranges plus build-ID consequences.
+`replace_interpreter` and `replace_dynamic_string(tag, occurrence, value)` replace
+PT_INTERP and NEEDED/SONAME/RUNPATH strings within verified existing capacity.
+Shared/suffix string aliases, version-table consumers and unmodeled references
+reject edits; dynamic string-table growth is unsupported.
+
+Mach-O custom payloads use `__CUSTOM`. `replace_custom_section` stays within
+capacity; `grow_custom_section` first uses verified zero padding in an isolated single-section
+custom segment or its verified zero file gap, extending the segment file size
+within its existing virtual capacity. It appends a replacement payload only when
+the custom segment is
+last in file order; expansion into another segment's VA is rejected.
+`add_custom_section` adds a page-aligned custom segment only within verified,
+zero-filled command capacity. Images with `__LINKEDIT` must reserve `__CUSTOM`
+during construction because adding a segment beyond it would violate native
+segment order. `replace_command_string` replaces dylib install
+names, dependencies and RPATHs within zero-padded command capacity. Unknown file
+range consumers reject payload edits. Chained fixups are traversed to inventory
+live bind/rebase slots; edits overlapping those slots are rejected, including
+slots outside section extents. Malformed chains and nonempty legacy bind/rebase
+streams or external/local relocation tables also reject edits. The chained-fixup
+decoder bounds copied names and decoded page entries to eight times its input
+size and rejects excessive alias expansion with `ValueTooLarge`.
+Signature policy defaults to `Reject`;
+`with_signature_policy(..., SignaturePolicy::Strip)` removes supported final
+`__LINKEDIT` signature command/blob, shrinks its segment extents and reports required
+external re-signing.
+
+`edit_fat_slice` applies fixed-capacity edits while preserving the FAT layout,
+padding, architecture metadata and other slices verbatim. `rebuild_fat_slice`
+permits thin-slice growth and uses the canonical FAT writer to rebuild container
+offsets/alignment. It preserves every other thin slice and CPU/subtype/alignment
+metadata; FAT width, byte order and padding may normalize. Report ranges are
+relative to the selected thin image.
+
+Generate and validate examples in a development shell:
+
+```sh
+cargo run --features elf,write --example elf_hello -- /tmp/elf-hello
+/tmp/elf-hello
+cargo run --features elf,write --example elf_pie -- /tmp/elf-pie --stripped
+cargo run --features elf,write --example elf_shared -- /tmp/libhexspell.so
+cargo run --features macho,write --example macho_hello -- arm64 /tmp/macho-arm64
+cargo run --features elf,write --example elf_edit -- /tmp/elf-hello /tmp/elf-edited
+# On macOS, including external signing and native loader checks:
+python3 tests/scripts/macho-runtime.py /tmp/hexspell-macho --arch arm64
+python3 tests/scripts/macho-runtime.py /tmp/hexspell-macho --arch x86_64
+python3 tests/scripts/elf-macho-runtime.py /tmp/hexspell-elf-macho
+```
+
+See the [implementation plan](elf-macho-generation-plan.md) and
+[validation matrix](elf-macho-generation-validation.md) for implementation milestones,
+supported loader profiles and recorded native acceptance evidence.

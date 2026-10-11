@@ -24,7 +24,7 @@ pe = []
 elf = []
 macho = []
 common = []
-pe-write = ["pe"]
+write = []
 
 [dev-dependencies]
 toml = "1.0" # For testing purpose
@@ -35,17 +35,49 @@ harness = false
 required-features = ["std", "pe", "elf", "macho", "common"]
 
 [[example]]
+name = "elf_pie"
+required-features = ["std", "elf", "write"]
+
+[[example]]
+name = "elf_shared"
+required-features = ["std", "elf", "write"]
+
+[[example]]
+name = "elf_edit"
+required-features = ["std", "elf", "write"]
+
+[[example]]
+name = "elf_hello"
+required-features = ["std", "elf", "write"]
+
+[[example]]
+name = "macho_validate"
+required-features = ["std", "macho", "write"]
+
+[[example]]
+name = "macho_hello"
+required-features = ["std", "macho", "write"]
+
+[[example]]
 name = "pe_hello"
-required-features = ["std", "pe-write"]
+required-features = ["std", "pe", "write"]
 
 [[example]]
 name = "pe_dll"
-required-features = ["std", "pe-write"]
+required-features = ["std", "pe", "write"]
 
 [[example]]
 name = "pe_dll_load"
-required-features = ["std", "pe-write"]
+required-features = ["std", "pe", "write"]
 
 [[example]]
 name = "pe_resources"
-required-features = ["std", "pe-write"]
+required-features = ["std", "pe", "write"]
+
+[[example]]
+name = "macho_dylib"
+required-features = ["std", "macho", "write"]
+
+[[example]]
+name = "macho_edit"
+required-features = ["std", "macho", "write"]

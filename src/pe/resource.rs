@@ -1,18 +1,18 @@
 //! Resource directory tree (`IMAGE_RESOURCE_DIRECTORY` / `ENTRY` / `DATA`).
 
-#[cfg(feature = "pe-write")]
+#[cfg(feature = "write")]
 mod edit;
-#[cfg(feature = "pe-write")]
+#[cfg(feature = "write")]
 pub mod icon;
-#[cfg(feature = "pe-write")]
+#[cfg(feature = "write")]
 mod owned;
-#[cfg(feature = "pe-write")]
+#[cfg(feature = "write")]
 pub mod strings;
-#[cfg(feature = "pe-write")]
+#[cfg(feature = "write")]
 pub mod version;
-#[cfg(feature = "pe-write")]
+#[cfg(feature = "write")]
 pub use edit::*;
-#[cfg(feature = "pe-write")]
+#[cfg(feature = "write")]
 pub use owned::*;
 
 use alloc::string::String;

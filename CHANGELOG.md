@@ -24,10 +24,11 @@
 
 - **General**
     - *Added*: Independent `pe`, `elf`, `macho`, and `common` feature flags, enabled by default; core fields/errors/byte utilities remain always available.
+    - *Changed*: **Breaking** — replace `pe-write`, `elf-write`, and `macho-write` with one independent `write` feature. Combine it with the desired format flags (for example, `elf,write`); `write` does not enable formats.
     - *Changed*: **Breaking** — package version becomes 2.0.0. `default-features = false` now disables formats and the public common helper interface. Enable `pe,elf,macho,common` explicitly to retain the previous no-std surface.
 
 - **PE**
-    - *Added*: Opt-in `pe-write` feature (disabled by default) for dependency-free PE32/PE32+ construction with owned sections, builder-specific handles, resolved layouts, imports, local exports, checked fixups, base relocations, TLS, and x64 runtime-function registration.
+    - *Added*: Opt-in `pe,write` feature (disabled by default) for dependency-free PE32/PE32+ construction with owned sections, builder-specific handles, resolved layouts, imports, local exports, checked fixups, base relocations, TLS, and x64 runtime-function registration.
     - *Added*: Lossless owned resource trees, canonical serialization, transactional append editing, explicit certificate preservation/stripping outcomes, and manifest/string/version/icon helpers.
     - *Added*: Linux generation examples for Hello EXEs and callable DLLs, matching Windows loaders, independent PE inspection, and Windows acceptance scripts.
     - *Fixed*: Mask resource-name high bits and check resource metadata/payload extents, aggregate traversal work, and certificate aliases before editing.
@@ -35,6 +36,22 @@
     - *Fixed*: Reject resource edits whose declared directory slots extend beyond the physical optional header, and reparse edited bytes before committing. Reject overflowing insertion extents before mutation and named x86 import RVAs that collide with the ordinal flag.
     - *Documentation*: Document generation, resource editing, validation, and implementation milestones.
 
+
+- **ELF**
+    - *Added*: Opt-in `elf,write` owned Linux AMD64 construction with checked segment/section placement, symbols, fixups, zero-fill and optional section headers; explicit-layout ELF32/64 serialization in either byte order with extended-count encodings.
+    - *Added*: Scoped Linux PIE/shared-object construction with explicit interpreters, versioned imports/exports, symbol visibility, eager import slots, SysV hashes, SONAME/RUNPATH and RELA pointer relocations; native loader examples and checks.
+    - *Added*: Program-header fallback for stripped ELF dynamic arrays/symbols, with bounded SysV/GNU hash counts and file-backed mapping validation.
+    - *Added*: Transactional nonallocated custom payload replacement/growth/addition/removal, isolated section renaming, owned notes, bounded interpreter/dynamic strings, and explicit stale/remove build-ID policies.
+    - *Added*: Shared-object initializer/finalizer arrays, Linux AMD64 general-dynamic TLS, and caller-provided DWARF unwind records with a GNU EH-frame index.
+    - *Fixed*: Preserve default-visible global/weak symbol preemption in generated initializer and finalizer arrays, consistently with ordinary pointer relocations.
+
+- **Mach-O**
+    - *Added*: Opt-in `macho,write` thin x86-64/arm64 construction with deployment targets, symbols, entry commands, zero-fill and checked architecture fixups; macOS 13+ dyld imports/ASCII exports, chained pointer binding/rebasing, dependencies and RPATHs; output requires external signing.
+    - *Added*: Transactional custom-section replacement/growth/addition with offset-consumer checks and mapped-address preservation; explicit supported signature stripping and external re-signing reports.
+    - *Added*: Capacity-checked dylib/RPATH string edits, fixed-capacity FAT edits and selected-slice resizing through canonical FAT rebuilding.
+    - *Added*: Ordered initializer arrays, generated libSystem termination registration, scoped Apple TLV descriptors and caller-encoded EH-frame integration; native acceptance harness signs, reparses and exercises generated images.
+    - *Fixed*: Reject edits overlapping live chained bind/rebase slots; validate chain mappings, page boundaries and import ordinals. Reject unmodeled legacy runtime writes instead of treating metadata extents as complete reference coverage.
+    - *Fixed*: Bound aggregate name expansion, page-table decoding and scanning work for aliased chained-fixup metadata.
 
 ## [1.2.1] - 2026-10-11
 

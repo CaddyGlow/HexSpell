@@ -150,7 +150,7 @@ pub fn decode_export_trie(data: &[u8]) -> Result<Vec<ExportTrieEntry>, FileParse
     let mut visited = alloc::vec![false; data.len()];
     while let Some((node_offset, prefix)) = pending.pop() {
         if node_offset >= data.len() {
-            continue;
+            return Err(FileParseError::BufferOverflow);
         }
         if visited[node_offset] {
             return Err(FileParseError::InvalidFileFormat);
@@ -187,14 +187,20 @@ pub fn decode_export_trie(data: &[u8]) -> Result<Vec<ExportTrieEntry>, FileParse
         pos += 1;
         let mut children = Vec::with_capacity(child_count as usize);
         for _ in 0..child_count {
-            let edge = *data.get(pos).ok_or(FileParseError::BufferOverflow)? as char;
-            pos += 1;
+            let tail = data.get(pos..).ok_or(FileParseError::BufferOverflow)?;
+            let end = tail
+                .iter()
+                .position(|b| *b == 0)
+                .ok_or(FileParseError::BufferOverflow)?;
+            let edge = core::str::from_utf8(&tail[..end])
+                .map_err(|_| FileParseError::InvalidFileFormat)?;
+            pos += end + 1;
             let (child_offset, width) = read_uleb128(data, pos)?;
             pos += width;
             let child_offset =
                 usize::try_from(child_offset).map_err(|_| FileParseError::BufferOverflow)?;
             let mut child_prefix = prefix.clone();
-            child_prefix.push(edge);
+            child_prefix.push_str(edge);
             children.push((child_offset, child_prefix));
         }
         pending.extend(children.into_iter().rev());
@@ -293,4 +299,271 @@ fn read_sleb128(data: &[u8], mut offset: usize) -> Result<(i64, usize), FilePars
         result |= !0i64 << shift;
     }
     Ok((result, offset - start))
+}
+
+/// An uncompressed chained import (DYLD_CHAINED_IMPORT).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChainedImport {
+    /// Signed dependency ordinal (positive values are one-based).
+    pub library_ordinal: i8,
+    /// Whether missing symbols are permitted.
+    pub weak: bool,
+    /// Imported symbol name.
+    pub name: String,
+}
+/// Starts for a scoped ordinary 64-bit chain. Authenticated formats are rejected.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChainedSegment {
+    /// Zero-based load-command segment index.
+    pub segment_index: usize,
+    /// Page size (4096 or 16384).
+    pub page_size: u16,
+    /// Preferred virtual offset from the Mach header mapping.
+    pub segment_offset: u64,
+    /// First chain byte offset for each page; None denotes no chain.
+    pub page_starts: Vec<Option<u16>>,
+}
+/// Parsed DYLD_CHAINED_PTR_64_OFFSET metadata. Pointer words remain in mapped segments.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChainedFixups {
+    /// Imported symbol records in pointer ordinal order.
+    pub imports: Vec<ChainedImport>,
+    /// Segments containing runtime pointer chains.
+    pub segments: Vec<ChainedSegment>,
+}
+/// Decodes the macOS writer profile: version zero, uncompressed imports and 64-bit offset pointers.
+/// Other import encodings, authenticated pointers and multi-start pages are explicitly unsupported.
+/// Copied names (including their terminators) and decoded page entries share an
+/// eight-times-input-size budget. Excessive alias expansion returns `ValueTooLarge`.
+pub fn decode_chained_fixups(data: &[u8]) -> Result<ChainedFixups, FileParseError> {
+    fn word(data: &[u8], offset: usize) -> Result<u32, FileParseError> {
+        Ok(u32::from_le_bytes(
+            data.get(
+                offset
+                    ..offset
+                        .checked_add(4)
+                        .ok_or(FileParseError::BufferOverflow)?,
+            )
+            .ok_or(FileParseError::BufferOverflow)?
+            .try_into()
+            .map_err(|_| FileParseError::BufferOverflow)?,
+        ))
+    }
+    fn half(data: &[u8], offset: usize) -> Result<u16, FileParseError> {
+        Ok(u16::from_le_bytes(
+            data.get(
+                offset
+                    ..offset
+                        .checked_add(2)
+                        .ok_or(FileParseError::BufferOverflow)?,
+            )
+            .ok_or(FileParseError::BufferOverflow)?
+            .try_into()
+            .map_err(|_| FileParseError::BufferOverflow)?,
+        ))
+    }
+    if word(data, 0)? != 0 || word(data, 20)? != 1 || word(data, 24)? != 0 {
+        return Err(FileParseError::UnsupportedFeature(String::from(
+            "chained fixup encoding",
+        )));
+    }
+    // Count bounds alone do not bound allocation: imports can share a long name,
+    // and many segment records can alias the same page-start array.
+    let mut remaining = data.len().saturating_mul(8);
+    let imports_offset = word(data, 8)? as usize;
+    let symbols_offset = word(data, 12)? as usize;
+    let count = word(data, 16)? as usize;
+    if count > data.len() / 4 {
+        return Err(FileParseError::BufferOverflow);
+    }
+    let imports_end = count
+        .checked_mul(4)
+        .and_then(|size| imports_offset.checked_add(size))
+        .ok_or(FileParseError::BufferOverflow)?;
+    data.get(imports_offset..imports_end)
+        .ok_or(FileParseError::BufferOverflow)?;
+    let mut imports = Vec::new();
+    for i in 0..count {
+        let raw = word(
+            data,
+            imports_offset
+                .checked_add(i * 4)
+                .ok_or(FileParseError::BufferOverflow)?,
+        )?;
+        let offset = symbols_offset
+            .checked_add((raw >> 9) as usize)
+            .ok_or(FileParseError::BufferOverflow)?;
+        let tail = data.get(offset..).ok_or(FileParseError::BufferOverflow)?;
+        let end = tail
+            .iter()
+            .take(remaining.saturating_add(1))
+            .position(|b| *b == 0)
+            .ok_or(if tail.len() <= remaining {
+                FileParseError::BufferOverflow
+            } else {
+                FileParseError::ValueTooLarge
+            })?;
+        remaining = remaining
+            .checked_sub(end + 1)
+            .ok_or(FileParseError::ValueTooLarge)?;
+        imports.push(ChainedImport {
+            library_ordinal: raw as i8,
+            weak: raw & 256 != 0,
+            name: core::str::from_utf8(&tail[..end])
+                .map_err(|_| FileParseError::InvalidFileFormat)?
+                .into(),
+        });
+    }
+    let starts = word(data, 4)? as usize;
+    let count = word(data, starts)? as usize;
+    if count > data.len() / 4 {
+        return Err(FileParseError::BufferOverflow);
+    }
+    let starts_end = count
+        .checked_mul(4)
+        .and_then(|size| size.checked_add(4))
+        .and_then(|size| starts.checked_add(size))
+        .ok_or(FileParseError::BufferOverflow)?;
+    data.get(starts..starts_end)
+        .ok_or(FileParseError::BufferOverflow)?;
+    let mut segments = Vec::new();
+    for i in 0..count {
+        let offset = word(
+            data,
+            starts
+                .checked_add(4 + i * 4)
+                .ok_or(FileParseError::BufferOverflow)?,
+        )? as usize;
+        if offset == 0 {
+            continue;
+        }
+        let offset = starts
+            .checked_add(offset)
+            .ok_or(FileParseError::BufferOverflow)?;
+        let size = word(data, offset)? as usize;
+        let segment_data = data
+            .get(
+                offset
+                    ..offset
+                        .checked_add(size)
+                        .ok_or(FileParseError::BufferOverflow)?,
+            )
+            .ok_or(FileParseError::BufferOverflow)?;
+        let page_size = half(segment_data, 4)?;
+        if !matches!(page_size, 4096 | 16384) || half(segment_data, 6)? != 6 {
+            return Err(FileParseError::UnsupportedFeature(String::from(
+                "chained pointer format",
+            )));
+        }
+        let segment_offset = u64::from_le_bytes(
+            segment_data
+                .get(8..16)
+                .ok_or(FileParseError::BufferOverflow)?
+                .try_into()
+                .map_err(|_| FileParseError::BufferOverflow)?,
+        );
+        let pages = half(segment_data, 20)?;
+        segment_data
+            .get(22..22 + usize::from(pages) * 2)
+            .ok_or(FileParseError::BufferOverflow)?;
+        remaining = remaining
+            .checked_sub(usize::from(pages) * core::mem::size_of::<Option<u16>>())
+            .ok_or(FileParseError::ValueTooLarge)?;
+        let mut page_starts = Vec::new();
+        for p in 0..usize::from(pages) {
+            let start = half(segment_data, 22 + p * 2)?;
+            if start == 0xffff {
+                page_starts.push(None);
+            } else if start & 0x8000 != 0 {
+                return Err(FileParseError::UnsupportedFeature(String::from(
+                    "multiple chained starts",
+                )));
+            } else if start >= page_size || start & 3 != 0 {
+                return Err(FileParseError::InvalidFileFormat);
+            } else {
+                page_starts.push(Some(start));
+            }
+        }
+        segments.push(ChainedSegment {
+            segment_index: i,
+            page_size,
+            segment_offset,
+            page_starts,
+        });
+    }
+    Ok(ChainedFixups { imports, segments })
+}
+
+impl<B: core::ops::Deref<Target = [u8]>> super::MachO<B> {
+    /// Lazily decodes modern chained-fixup metadata for the supported ordinary 64-bit profile.
+    pub fn chained_fixups(&self) -> Result<Option<ChainedFixups>, FileParseError> {
+        for cmd in &self.load_commands {
+            if cmd.cmd.value != 0x80000034 {
+                continue;
+            }
+            let offset = cmd.offset();
+            if cmd.cmdsize.value < 16 {
+                return Err(FileParseError::InvalidFileFormat);
+            }
+            let order = self.byte_order();
+            let start = order.read_u32(&self.buffer, offset + 8)? as usize;
+            let size = order.read_u32(&self.buffer, offset + 12)? as usize;
+            let end = start
+                .checked_add(size)
+                .ok_or(FileParseError::BufferOverflow)?;
+            return decode_chained_fixups(
+                self.buffer
+                    .get(start..end)
+                    .ok_or(FileParseError::BufferOverflow)?,
+            )
+            .map(Some);
+        }
+        Ok(None)
+    }
+}
+
+/// One DYLD_CHAINED_PTR_64_OFFSET word. `next` is a byte distance within its page.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChainedPointer {
+    /// Bind to an import-table ordinal with an unsigned embedded addend.
+    Bind {
+        /// Zero-based chained import index.
+        ordinal: u32,
+        /// Unsigned embedded pointer addend.
+        addend: u8,
+        /// Distance to next pointer, or zero to end the chain.
+        next: u16,
+    },
+    /// Rebase an image-relative target; high8 reconstructs the top address bits.
+    Rebase {
+        /// Image-relative target offset.
+        target: u64,
+        /// Top eight bits of the unslid pointer.
+        high8: u8,
+        /// Distance to next pointer, or zero to end the chain.
+        next: u16,
+    },
+}
+/// Decodes one ordinary 64-bit offset chain word, rejecting nonzero reserved bits.
+pub fn decode_chained_pointer(word: u64) -> Result<ChainedPointer, FileParseError> {
+    let next = (((word >> 51) & 0xfff) * 4) as u16;
+    if word >> 63 != 0 {
+        if word & (0x7ffffu64 << 32) != 0 {
+            return Err(FileParseError::InvalidFileFormat);
+        }
+        Ok(ChainedPointer::Bind {
+            ordinal: (word & 0xffffff) as u32,
+            addend: (word >> 24) as u8,
+            next,
+        })
+    } else {
+        if word & (0x7fu64 << 44) != 0 {
+            return Err(FileParseError::InvalidFileFormat);
+        }
+        Ok(ChainedPointer::Rebase {
+            target: word & 0xfffffffff,
+            high8: (word >> 36) as u8,
+            next,
+        })
+    }
 }

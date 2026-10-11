@@ -1276,7 +1276,7 @@ fn test_elf_split_and_merge_load_segments() {
 
 #[test]
 fn test_elf_extended_shnum_core_and_ar_archive() {
-    let mut buffer = elf64_base(0, 0, 0, 0x400, 0x800);
+    let mut buffer = elf64_base(0, 0, 0, 0x400, 0x400 + 0xff00 * 64);
     buffer[16..18].copy_from_slice(&4u16.to_le_bytes());
     write_sh64(
         &mut buffer,
@@ -1286,14 +1286,14 @@ fn test_elf_extended_shnum_core_and_ar_archive() {
         0,
         0,
         0,
-        2,
+        0xff00,
         0,
         0,
         0,
         0,
     );
     let elf = elf::ELF::from_buffer(buffer).expect("parse extended shnum");
-    assert_eq!(elf.section_headers.len(), 2);
+    assert_eq!(elf.section_headers.len(), 0xff00);
     assert!(elf.is_core());
 
     let mut ar =
@@ -1398,4 +1398,240 @@ fn write_ph64(
     buffer[base + 32..base + 40].copy_from_slice(&filesz.to_le_bytes());
     buffer[base + 40..base + 48].copy_from_slice(&memsz.to_le_bytes());
     buffer[base + 48..base + 56].copy_from_slice(&0x1000u64.to_le_bytes());
+}
+
+fn stripped_dynamic_image(gnu_hash: bool) -> elf::ELF {
+    let mut bytes = vec![0; 512];
+    bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+    let put = |b: &mut [u8], offset: usize, value: u64, width: usize| {
+        b[offset..offset + width].copy_from_slice(&value.to_le_bytes()[..width]);
+    };
+    put(&mut bytes, 16, 3, 2);
+    put(&mut bytes, 18, 62, 2);
+    put(&mut bytes, 20, 1, 4);
+    put(&mut bytes, 32, 64, 8);
+    put(&mut bytes, 52, 64, 2);
+    put(&mut bytes, 54, 56, 2);
+    put(&mut bytes, 56, 2, 2);
+    put(&mut bytes, 64, 1, 4);
+    put(&mut bytes, 80, 0x400000, 8);
+    put(&mut bytes, 96, 512, 8);
+    put(&mut bytes, 104, 1024, 8);
+    put(&mut bytes, 120, 2, 4);
+    put(&mut bytes, 128, 176, 8);
+    put(&mut bytes, 136, 0x4000b0, 8);
+    put(&mut bytes, 152, 96, 8);
+    put(&mut bytes, 160, 96, 8);
+    for (i, (tag, value)) in [
+        (if gnu_hash { 0x6fff_fef5 } else { 4 }, 0x400160),
+        (5, 0x400150),
+        (6, 0x400120),
+        (10, 5),
+        (11, 24),
+        (0, 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        put(&mut bytes, 176 + i * 16, tag, 8);
+        put(&mut bytes, 184 + i * 16, value, 8);
+    }
+    put(&mut bytes, 312, 1, 4);
+    put(&mut bytes, 320, 0x400180, 8);
+    bytes[336..341].copy_from_slice(b"\0foo\0");
+    if gnu_hash {
+        for (i, value) in [1, 1, 1, 0, 0, 0, 1, 1].into_iter().enumerate() {
+            put(&mut bytes, 352 + i * 4, value, 4);
+        }
+    } else {
+        for (i, value) in [1, 2, 1, 0, 0].into_iter().enumerate() {
+            put(&mut bytes, 352 + i * 4, value, 4);
+        }
+    }
+    elf::ELF::from_buffer(bytes).unwrap()
+}
+
+#[test]
+fn dynamic_readers_use_program_headers_without_section_headers() {
+    for gnu in [false, true] {
+        let image = stripped_dynamic_image(gnu);
+        let dynamic = image
+            .dynamic()
+            .unwrap()
+            .expect("PT_DYNAMIC should be discovered");
+        assert_eq!(dynamic.offset, 176);
+        assert_eq!(dynamic.entries.len(), 5);
+        let symbols = image
+            .dynamic_symbols()
+            .unwrap()
+            .expect("DT_SYMTAB should be discovered");
+        assert_eq!(symbols.offset, 288);
+        assert_eq!(symbols.strtab_offset, 336);
+        assert_eq!(symbols.symbols.len(), 2);
+        assert_eq!(
+            symbols.name(&image.buffer, &symbols.symbols[1]).unwrap(),
+            "foo"
+        );
+        assert_eq!(symbols.symbols[1].st_value(), 0x400180);
+    }
+}
+
+#[test]
+fn stripped_dynamic_readers_reject_unmapped_and_truncated_tables() {
+    for (offset, value) in [
+        (184, 0x400300u64),
+        (216, 0x400300),
+        (232, 1000),
+        (248, 16),
+        (152, 95),
+    ] {
+        let mut image = stripped_dynamic_image(false);
+        image.buffer[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        let image = elf::ELF::from_buffer(image.buffer).unwrap();
+        assert!(image.dynamic_symbols().is_err(), "offset {offset}");
+    }
+}
+
+#[test]
+fn stripped_dynamic_reader_supports_elf32_big_endian() {
+    let mut bytes = vec![0; 256];
+    bytes[..7].copy_from_slice(b"\x7fELF\x01\x02\x01");
+    let put = |b: &mut [u8], offset: usize, value: u64, width: usize| {
+        b[offset..offset + width].copy_from_slice(&value.to_be_bytes()[8 - width..]);
+    };
+    for (at, value, width) in [
+        (16, 3, 2),
+        (18, 3, 2),
+        (20, 1, 4),
+        (28, 52, 4),
+        (40, 52, 2),
+        (42, 32, 2),
+        (44, 2, 2),
+        (52, 1, 4),
+        (60, 0x400000, 4),
+        (68, 256, 4),
+        (72, 512, 4),
+        (84, 2, 4),
+        (88, 112, 4),
+        (92, 0x400070, 4),
+        (100, 48, 4),
+        (104, 48, 4),
+    ] {
+        put(&mut bytes, at, value, width);
+    }
+    for (i, (tag, value)) in [
+        (4, 0x4000d0),
+        (5, 0x4000c0),
+        (6, 0x4000a0),
+        (10, 5),
+        (11, 16),
+        (0, 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        put(&mut bytes, 112 + i * 8, tag, 4);
+        put(&mut bytes, 116 + i * 8, value, 4);
+    }
+    put(&mut bytes, 176, 1, 4);
+    put(&mut bytes, 180, 0x4000f0, 4);
+    bytes[192..197].copy_from_slice(b"\0foo\0");
+    for (i, value) in [1, 2, 1, 0, 0].into_iter().enumerate() {
+        put(&mut bytes, 208 + i * 4, value, 4);
+    }
+    let image = elf::ELF::from_buffer(bytes).unwrap();
+    assert_eq!(image.dynamic().unwrap().unwrap().offset, 112);
+    let symbols = image.dynamic_symbols().unwrap().unwrap();
+    assert_eq!(symbols.offset, 160);
+    assert_eq!(symbols.symbols.len(), 2);
+    assert_eq!(symbols.symbols[1].st_value(), 0x4000f0);
+    assert_eq!(
+        symbols.name(&image.buffer, &symbols.symbols[1]).unwrap(),
+        "foo"
+    );
+}
+
+#[test]
+fn stripped_dynamic_reader_bounds_hash_chains_and_string_names() {
+    // Reject a missing dynamic terminator, oversized hash counts, invalid name
+    // offsets and a GNU chain which cannot terminate inside its file mapping.
+    for case in 0..4 {
+        let mut image = stripped_dynamic_image(case == 3);
+        match case {
+            0 => image.buffer[256..264].copy_from_slice(&1u64.to_le_bytes()),
+            1 => image.buffer[356..360].copy_from_slice(&u32::MAX.to_le_bytes()),
+            2 => image.buffer[312..316].copy_from_slice(&5u32.to_le_bytes()),
+            _ => image.buffer[380..].fill(0),
+        }
+        let image = elf::ELF::from_buffer(image.buffer).unwrap();
+        assert!(image.dynamic_symbols().is_err(), "case {case}");
+    }
+}
+
+#[test]
+fn extended_program_count_resolves_null_section_without_changing_raw_fields() {
+    // Independent ELF64 fixture: canonical PN_XNUM count lives in section zero.
+    let section_table = 64 + 0xffff * 56;
+    let mut bytes = vec![0u8; section_table + 128 + 16];
+    bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+    for (offset, value, size) in [
+        (16, 2u64, 2),
+        (18, 62, 2),
+        (20, 1, 4),
+        (32, 64, 8),
+        (40, section_table as u64, 8),
+        (52, 64, 2),
+        (54, 56, 2),
+        (56, 65535, 2),
+        (58, 64, 2),
+        (60, 2, 2),
+        (62, 1, 2),
+        (section_table + 44, 65535, 4),
+        (section_table + 64, 1, 4),
+        (section_table + 68, 3, 4),
+        (section_table + 88, (section_table + 128) as u64, 8),
+        (section_table + 96, 11, 8),
+    ] {
+        bytes[offset..offset + size].copy_from_slice(&value.to_le_bytes()[..size]);
+    }
+    bytes[section_table + 128..section_table + 139].copy_from_slice(b"\0.shstrtab\0");
+    let image = elf::ELF::from_buffer(bytes).unwrap();
+    assert_eq!(image.program_headers.len(), 65535);
+    assert_eq!(image.section_name(1).unwrap(), ".shstrtab");
+    assert_eq!(image.header.ph_num.value, 65535);
+}
+#[test]
+fn extended_program_escape_rejects_noncanonical_small_count() {
+    let mut bytes = std::fs::read("tests/samples/linux").unwrap();
+    let image = elf::ELF::from_slice(&bytes).unwrap();
+    let order = image.byte_order().unwrap();
+    let mut count = image.header.ph_num;
+    count.update_with(&mut bytes, 0xffff, order).unwrap();
+    assert!(elf::ELF::from_buffer(bytes).is_err());
+}
+
+#[test]
+fn extended_escape_counts_are_canonical_in_eager_and_borrowed_readers() {
+    let mut bytes = elf64_base(0, 0, 0, 64, 128);
+    // A nonzero shoff with e_shnum zero means extended numbering, not sectionless.
+    bytes[64 + 32..64 + 40].copy_from_slice(&2u64.to_le_bytes());
+    assert!(elf::ELF::from_slice(&bytes).is_err());
+    assert!(elf::view::ElfHeaders::parse(&bytes)
+        .unwrap()
+        .section_count()
+        .is_err());
+    bytes[60..62].copy_from_slice(&1u16.to_le_bytes());
+    bytes[56..58].copy_from_slice(&0xffffu16.to_le_bytes());
+    assert!(elf::view::ElfHeaders::parse(&bytes)
+        .unwrap()
+        .program_count()
+        .is_err());
+    bytes[56..58].copy_from_slice(&0u16.to_le_bytes());
+    bytes[62..64].copy_from_slice(&0xffffu16.to_le_bytes());
+    bytes[64 + 40..64 + 44].copy_from_slice(&1u32.to_le_bytes());
+    assert!(elf::ELF::from_slice(&bytes).is_err());
+    assert!(elf::view::ElfHeaders::parse(&bytes)
+        .unwrap()
+        .section_name_table_index()
+        .is_err());
 }

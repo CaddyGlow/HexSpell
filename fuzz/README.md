@@ -46,3 +46,14 @@ in `../ms-compress/fuzz/README.md`. Replay a saved crash without instrumentation
 ```sh
 cargo run --manifest-path fuzz/Cargo.toml --locked --bin replay -- parse path/to/crash.fuzz
 ```
+
+The `generation` target exercises bounded ELF/Mach-O owned builders, ELF custom
+payload growth/addition and Mach-O dynamic imports, chained pointers, lifecycle
+arrays and initialized TLVs. Payloads are capped at 256 bytes, alignments are
+bounded, and rejected capacity edits must preserve the original buffer. Ordinary
+unit tests additionally cover bounded loader strings, owned notes, signature
+stripping, malformed offset ranges and FAT rebuilding. These are smoke tests;
+they do not claim native runtime coverage or sustained fuzz-campaign results.
+Run it with `cargo hfuzz run generation` from this directory, or replay with
+`cargo run --bin replay -- generation PATH`. The smoke tests cover all 256
+selector values without invoking external tools or executing generated code.

@@ -1,6 +1,6 @@
 # PE generation and resource editing proposal
 
-Status: implemented behind the opt-in `pe-write` feature. This document retains
+Status: implemented behind the opt-in `write` feature with `pe`. This document retains
 the original design contracts; actual API names and usage are documented in the
 [guide](guide.md#pe-generation-and-resource-editing). See the
 [implementation plan](pe-generation-plan.md) for delivery and validation details.

@@ -3,8 +3,8 @@
 //! HexSpell is a collection of helpers for inspecting and mutating executable formats. It focuses
 //! on providing a small, predictable API that mirrors the underlying file layout so that programs
 //! can tweak headers or sections without rebuilding the whole file.
-//! The opt-in `pe-write` feature enables `pe::build::PeBuilder`, lossless resource
-//! serialization, and transactional editing in `pe::resource`.
+//! The opt-in `write` feature enables builders and transactional editing for each
+//! enabled format, including lossless PE resource serialization.
 //!
 //! The crate is split into dedicated modules for the **PE**, **ELF**, and **Mach-O** formats. Each
 //! module exposes types for reading a binary from disk, modifying its fields in place, and writing
@@ -18,7 +18,8 @@
 //!
 //! Defaults enable `std`, `pe`, `elf`, `macho`, and the `common` helper interface.
 //! Disable defaults and select individual formats for `no_std` plus `alloc`.
-//! The `pe-write` feature implies `pe` and enables generation/resource editing.
+//! The `write` feature enables generation/editing without enabling any formats.
+//! Combine it with `pe`, `elf`, or `macho`; it also works without `std`.
 //! Core fields, errors, and byte utilities are always available. Owned buffers
 //! and parsed tables require an allocator; `pe::view::PeHeaders` does not allocate.
 //!

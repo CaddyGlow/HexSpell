@@ -13,6 +13,29 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  macos-writers:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+    - name: Check Mach-O writer
+      run: |
+        cargo clippy --all-targets --features macho,write -- -D warnings
+        cargo test --features macho,write
+    - name: Native signing, loading, edits, TLS and unwind acceptance
+      run: python3 tests/scripts/macho-runtime.py "$RUNNER_TEMP/hexspell-macho"
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: macho-acceptance-${{ matrix.runner }}
+        path: ${{ runner.temp }}/hexspell-macho
+
   test:
     runs-on: ubuntu-latest
 
@@ -44,7 +67,7 @@ jobs:
     - name: Test
       run: cargo test --verbose
 
-    - name: Check opt-in PE writing APIs
+    - name: Check opt-in writing APIs
       run: |
         cargo clippy --all-features --all-targets -- -D warnings
         cargo test --all-features
@@ -69,8 +92,8 @@ jobs:
       run: |
         mkdir -p /tmp/hexspell-generated
         for arch in x86 x64; do
-          cargo run --features pe-write --example pe_hello -- "$arch" "/tmp/hexspell-generated/hello-$arch.exe"
-          cargo run --features pe-write --example pe_dll -- "$arch" "/tmp/hexspell-generated/demo-$arch.dll"
+          cargo run --features pe,write --example pe_hello -- "$arch" "/tmp/hexspell-generated/hello-$arch.exe"
+          cargo run --features pe,write --example pe_dll -- "$arch" "/tmp/hexspell-generated/demo-$arch.dll"
           python tests/scripts/inspect_generated_pe.py --arch "$arch" --kind exe "/tmp/hexspell-generated/hello-$arch.exe"
           python tests/scripts/inspect_generated_pe.py --arch "$arch" --kind dll "/tmp/hexspell-generated/demo-$arch.dll"
         done
@@ -78,6 +101,8 @@ jobs:
       run: |
         cargo run --release --locked --manifest-path tools/pe-bench/Cargo.toml -- /tmp/hexspell-pe-corpus 1 1
         python tools/pe-bench/pefile_bench.py /tmp/hexspell-pe-corpus --milliseconds 1 --rounds 1
+    - name: Validate generated ELF and structural Mach-O profiles
+      run: python tests/scripts/elf-macho-runtime.py /tmp/hexspell-elf-macho
 
   no-std:
     runs-on: ubuntu-latest
@@ -93,11 +118,19 @@ jobs:
       run: cargo clippy --no-default-features --features pe,elf,macho,common --all-targets -- -D warnings
     - name: Test in-memory APIs without std
       run: cargo test --no-default-features --features pe,elf,macho,common
-    - name: PE writing without std
+    - name: Writing without std
       run: |
-        cargo check --no-default-features --features pe-write --target thumbv7em-none-eabi
-        cargo clippy --no-default-features --features pe-write --all-targets -- -D warnings
-        cargo test --no-default-features --features pe-write
+        cargo check --no-default-features --features pe,elf,macho,write --target thumbv7em-none-eabi
+        cargo clippy --no-default-features --features pe,elf,macho,write --all-targets -- -D warnings
+        cargo test --no-default-features --features pe,elf,macho,write
+
+  msrv-writers:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@1.88.0
+    - name: Check writer MSRV without dev dependencies
+      run: cargo check --lib --all-features --locked
 
   feature-matrix:
     runs-on: ubuntu-latest
@@ -109,6 +142,11 @@ jobs:
           - elf
           - macho
           - common
+          - write
+          - pe,write
+          - elf,write
+          - macho,write
+          - pe,elf,macho,write
           - pe,elf
           - pe,macho
           - pe,common

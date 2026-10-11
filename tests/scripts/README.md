@@ -60,8 +60,8 @@ TLS pointer widths and relocation sites, x64 runtime-function coverage, and the
 three DLL exports. It prints hashes and preferred bases for recording results.
 
 ```sh
-cargo run --features pe-write --example pe_hello -- x64 /tmp/hello-x64.exe
-cargo run --features pe-write --example pe_dll -- x64 /tmp/demo-x64.dll
+cargo run --features pe,write --example pe_hello -- x64 /tmp/hello-x64.exe
+cargo run --features pe,write --example pe_dll -- x64 /tmp/demo-x64.dll
 /tmp/hexspell-pefile-venv/bin/python tests/scripts/inspect_generated_pe.py --arch x64 --kind exe /tmp/hello-x64.exe
 /tmp/hexspell-pefile-venv/bin/python tests/scripts/inspect_generated_pe.py --arch x64 --kind dll /tmp/demo-x64.dll
 ```
@@ -69,7 +69,7 @@ cargo run --features pe-write --example pe_dll -- x64 /tmp/demo-x64.dll
 Repeat with `x86` for PE32. These checks are separate from Windows execution,
 forced relocation, TLS callback ordering, and unwind-runtime verification.
 
-For Windows runtime validation, build `pe_dll_load` with `--features pe-write` for
+For Windows runtime validation, build `pe_dll_load` with `--features pe,write` for
 both `i686-pc-windows-msvc` and `x86_64-pc-windows-msvc`. The MSVC Rust standard
 library may require Microsoft's x86/x64 Visual C++ runtime redistributables in the
 test guest; the generated EXEs/DLLs themselves do not use the CRT.
@@ -90,7 +90,7 @@ runtime unwind APIs on a relocated mapping. The resource driver uses native
 resource/version/icon APIs. Exercise actual resource edits too:
 
 ```sh
-cargo run --features pe-write --example pe_resources -- hello-x64.exe edited-x64.exe preserve
+cargo run --features pe,write --example pe_resources -- hello-x64.exe edited-x64.exe preserve
 ```
 
 ```powershell
@@ -99,3 +99,32 @@ cargo run --features pe-write --example pe_resources -- hello-x64.exe edited-x64
 
 Repeat the editing check for x86. The drivers print JSON with hashes/results for
 recording validation evidence; no generated binaries need to be committed.
+
+### ELF and Mach-O writer acceptance
+
+Run `python3 tests/scripts/elf-macho-runtime.py /tmp/hexspell-elf-macho` from the
+repository root in a Rust development shell. It generates ELF and Mach-O examples,
+checks layouts independently using Python's standard library, invokes `readelf`
+and optionally `llvm-readobj`, and runs Linux AMD64 ELF acceptance. The native C
+loader checks constructors/finalizers, imports/exports, relocated pointers,
+initialized/zero-fill data, independent TLS storage across threads and caller
+unwind records. Static executable reruns follow append-only custom-data editing.
+
+On macOS run:
+
+```sh
+python3 tests/scripts/macho-runtime.py /tmp/hexspell-macho --arch arm64
+python3 tests/scripts/macho-runtime.py /tmp/hexspell-macho --arch x86_64
+```
+
+An arm64 host requires Rosetta for the x86-64 gate. The harness generates hello and
+dylib examples, uses `otool`/`dyld_info` plus independent inspection, applies external
+ad-hoc signing, verifies and reparses signed images, and calls native imports,
+exports and rebased pointers. It also checks custom-data edits with re-signing and
+selected-slice FAT rebuilding. Runtime metadata gates use `native-loader.c` for
+constructor/terminator ordering, per-thread TLVs and supplied-CFI traversal through
+frameless unwind probes. TLV dylibs
+are pinned by dyld; their termination gate checks process-exit callbacks rather
+than assuming that `dlclose` unloads the image. Reports record target architecture,
+tool versions and individual passed gates. Structural checks never substitute for
+native acceptance; see the [recorded matrix](../../docs/elf-macho-generation-validation.md).

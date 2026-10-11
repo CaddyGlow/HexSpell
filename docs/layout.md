@@ -88,3 +88,20 @@ original file offsets and sizes. Owned imports store descriptor fields once in
 Base relocations are parsed from the buffer on demand rather than cached on PE.
 ELF `ProgramHeaderEntry::parse_one` and `SectionHeaderEntry::parse_one`
 return the existing layout types without intermediate vector storage.
+
+## Writer specifications and edit reports
+
+With `elf,write`/`macho,write`, owned builder specifications deliberately contain
+no `Field` offsets: they have no file layout until serialization. The result of
+`build` is the existing `ELF` or `MachO` object, whose field accessors retain the
+same offsets and widths listed above. `build_with_layout` also returns file/virtual
+placement data; virtual-only sections have no file payload location.
+
+Transactional edit sessions reparse committed bytes, so returned objects have
+current `Field` offsets. Every supported custom-data edit preserves existing mapped
+virtual addresses. Append-only ELF growth updates section offsets/sizes; additions
+rebuild section-name/header tables while preserving existing indices. Mach-O growth
+updates only the owned custom segment/section ranges. Edit reports list overwritten
+metadata/payload ranges, logical moved payload ranges, build-ID consequences and
+external signing requirements. FAT rebuild reports remain relative to the selected
+thin slice. No new header field accessor layout is introduced.

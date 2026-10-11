@@ -23,7 +23,7 @@ use crate::field::{Field, FixedBytes};
 
 pub mod arch_data;
 pub mod bound;
-#[cfg(feature = "pe-write")]
+#[cfg(feature = "write")]
 pub mod build;
 pub mod certificate;
 pub mod clr;

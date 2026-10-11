@@ -1,4 +1,4 @@
-#![cfg(feature = "pe-write")]
+#![cfg(all(feature = "pe", feature = "write"))]
 #[path = "../examples/support/mod.rs"]
 #[allow(dead_code)]
 mod support;

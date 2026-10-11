@@ -7,9 +7,10 @@ Usage and feature migration: [guide.md](guide.md#features-and-migrating-to-20).
 
 `pe`, `elf`, `macho`, and `common` are independent and enabled by default, together
 with `std`. `common` exposes `reloc`, `strings`, `validation`, and `write`; core
-fields, errors, and byte utilities remain available independently. `pe-write`
-enables PE construction and resource editing, implies `pe`, and is disabled by
-default. It works without `std` using `alloc`.
+fields, errors, and byte utilities remain available independently. The opt-in
+`write` feature enables construction and editing for enabled formats. Combine it
+with `pe` for PE construction and resource editing; it does not imply a format.
+It works without `std` using `alloc`.
 
 The package version is 2.0.0 because consumers using `default-features = false`
 must now explicitly enable the formats and helper interface they use.
@@ -28,7 +29,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 cargo clippy --all-features --all-targets -- -D warnings
 cargo test --all-features
-cargo test --no-default-features --features pe,elf,macho,common,pe-write --test no_std
+cargo test --no-default-features --features pe,elf,macho,common,pe,write --test no_std
 ```
 
 The test suites cover both PE classes, checked layout and fixups, stable imports,

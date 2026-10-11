@@ -186,3 +186,21 @@ fn fat_selection_and_hostile_counts_do_not_allocate() {
     assert!(result.is_err());
     assert_eq!(count, 0);
 }
+
+#[test]
+fn chained_fixup_alias_expansion_has_bounded_allocations() {
+    let imports = 1024usize;
+    let names = 32 + imports * 4;
+    let mut bytes = vec![0; names + 8193];
+    for (at, value) in [(4, 28), (8, 32), (12, names), (16, imports), (20, 1)] {
+        bytes[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
+    }
+    bytes[names..names + 8192].fill(b'x');
+    let (result, _, allocated) = measured(|| macho::dyld::decode_chained_fixups(&bytes));
+    assert!(result.is_err());
+    assert!(
+        allocated < bytes.len() * 16,
+        "allocated {allocated} bytes for {} input bytes",
+        bytes.len()
+    );
+}
