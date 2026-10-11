@@ -1,0 +1,16 @@
+[package]
+name = "hexspell-fuzz"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[workspace]
+
+[dependencies]
+honggfuzz = "0.5"
+hexspell = { package = "caddy-hexspell", path = ".." }
+
+[profile.release]
+debug = 1
+overflow-checks = true

@@ -10,7 +10,7 @@ repository = "https://github.com/CaddyGlow/HexSpell"
 homepage = "https://github.com/CaddyGlow/HexSpell"
 documentation = "https://docs.rs/caddy-hexspell"
 readme = "README.md"
-exclude = ["tests/*", "tools/pe-bench/*", "benches/*"]
+exclude = ["tests/*", "tools/pe-bench/*", "benches/*", "fuzz/*"]
 keywords = ["binary", "executable", "parser", "PE", "ELF" ]
 categories = ["development-tools", "parsing"]
 

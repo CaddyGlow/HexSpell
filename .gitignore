@@ -1,3 +1,7 @@
 Cargo.lock 
 target/
 tests/out/*
+/fuzz/corpus/
+/fuzz/hfuzz_workspace/
+/fuzz/hfuzz_target/
+!/fuzz/Cargo.lock

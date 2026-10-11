@@ -44,6 +44,11 @@ jobs:
     - name: Test
       run: cargo test --verbose
 
+    - name: Fuzz harness regression tests
+      run: |
+        cargo clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
+        cargo test --manifest-path fuzz/Cargo.toml --locked
+
     - uses: actions/setup-python@v5
       with:
         python-version: '3.12'
