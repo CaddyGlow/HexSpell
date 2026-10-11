@@ -732,10 +732,22 @@ impl<B: core::ops::Deref<Target = [u8]>> ELF<B> {
         if header.sh_off.value == 0 || header.sh_ent_size.value == 0 {
             return Ok(0);
         }
-        let base = header.sh_off.value as usize;
+        let base = usize::try_from(header.sh_off.value)
+            .map_err(|_| errors::FileParseError::BufferOverflow)?;
         match class {
-            ElfClass::Elf32 => Ok(order.read_u32(buffer, base + 20)? as usize),
-            ElfClass::Elf64 => Ok(order.read_u64(buffer, base + 32)? as usize),
+            ElfClass::Elf32 => Ok(order.read_u32(
+                buffer,
+                base.checked_add(20)
+                    .ok_or(errors::FileParseError::BufferOverflow)?,
+            )? as usize),
+            ElfClass::Elf64 => usize::try_from(
+                order.read_u64(
+                    buffer,
+                    base.checked_add(32)
+                        .ok_or(errors::FileParseError::BufferOverflow)?,
+                )?,
+            )
+            .map_err(|_| errors::FileParseError::BufferOverflow),
         }
     }
 }

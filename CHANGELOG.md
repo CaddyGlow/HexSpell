@@ -20,6 +20,15 @@
 >     - *Added*: Your message here using `markdown`.
 
 
+## [Unreleased]
+
+- **ELF**
+    - *Fixed*: Reject overflowing extended section-table offsets instead of panicking.
+
+- **Mach-O**
+    - *Fixed*: Reject cyclic export tries using an iterative traversal instead of overflowing the call stack.
+
+
 ## [1.2.0] - 2026-10-11
 
 - **General**

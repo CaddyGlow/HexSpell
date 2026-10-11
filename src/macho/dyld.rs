@@ -146,65 +146,60 @@ pub fn decode_bind_opcodes(data: &[u8]) -> Result<Vec<BindOpcode>, FileParseErro
 /// Decodes every exported symbol from an export trie blob.
 pub fn decode_export_trie(data: &[u8]) -> Result<Vec<ExportTrieEntry>, FileParseError> {
     let mut out = Vec::new();
-    walk_export_node(data, 0, String::new(), &mut out)?;
+    let mut pending = alloc::vec![(0usize, String::new())];
+    let mut visited = alloc::vec![false; data.len()];
+    while let Some((node_offset, prefix)) = pending.pop() {
+        if node_offset >= data.len() {
+            continue;
+        }
+        if visited[node_offset] {
+            return Err(FileParseError::InvalidFileFormat);
+        }
+        visited[node_offset] = true;
+
+        let mut pos = node_offset;
+        let terminal_size = if data[pos] & 0x80 != 0 {
+            let (value, width) = read_uleb128(data, pos)?;
+            pos += width;
+            usize::try_from(value).map_err(|_| FileParseError::BufferOverflow)?
+        } else {
+            let value = data[pos] as usize;
+            pos += 1;
+            value
+        };
+
+        if terminal_size > 0 {
+            let term_end = pos
+                .checked_add(terminal_size)
+                .ok_or(FileParseError::BufferOverflow)?;
+            let term = data
+                .get(pos..term_end)
+                .ok_or(FileParseError::BufferOverflow)?;
+            pos = term_end;
+            if let Some(entry) = parse_terminal_export(prefix.clone(), term)? {
+                out.push(entry);
+            }
+        }
+
+        let Some(&child_count) = data.get(pos) else {
+            continue;
+        };
+        pos += 1;
+        let mut children = Vec::with_capacity(child_count as usize);
+        for _ in 0..child_count {
+            let edge = *data.get(pos).ok_or(FileParseError::BufferOverflow)? as char;
+            pos += 1;
+            let (child_offset, width) = read_uleb128(data, pos)?;
+            pos += width;
+            let child_offset =
+                usize::try_from(child_offset).map_err(|_| FileParseError::BufferOverflow)?;
+            let mut child_prefix = prefix.clone();
+            child_prefix.push(edge);
+            children.push((child_offset, child_prefix));
+        }
+        pending.extend(children.into_iter().rev());
+    }
     Ok(out)
-}
-
-fn walk_export_node(
-    data: &[u8],
-    node_offset: usize,
-    prefix: String,
-    out: &mut Vec<ExportTrieEntry>,
-) -> Result<(), FileParseError> {
-    if node_offset >= data.len() {
-        return Ok(());
-    }
-
-    let mut pos = node_offset;
-    let terminal_size = if data[pos] & 0x80 != 0 {
-        let (v, n) = read_uleb128(data, pos)?;
-        pos += n;
-        v as usize
-    } else {
-        let v = data[pos] as usize;
-        pos += 1;
-        v
-    };
-
-    if terminal_size > 0 {
-        let term_end = pos
-            .checked_add(terminal_size)
-            .ok_or(FileParseError::BufferOverflow)?;
-        if term_end > data.len() {
-            return Err(FileParseError::BufferOverflow);
-        }
-        let term = &data[pos..term_end];
-        pos = term_end;
-        if let Some(entry) = parse_terminal_export(prefix.clone(), term)? {
-            out.push(entry);
-        }
-    }
-
-    if pos >= data.len() {
-        return Ok(());
-    }
-
-    let child_count = data[pos] as usize;
-    pos += 1;
-    for _ in 0..child_count {
-        if pos >= data.len() {
-            return Err(FileParseError::BufferOverflow);
-        }
-        let edge = data[pos] as char;
-        pos += 1;
-        let (child_off, n) = read_uleb128(data, pos)?;
-        pos += n;
-        let mut child_prefix = prefix.clone();
-        child_prefix.push(edge);
-        walk_export_node(data, child_off as usize, child_prefix, out)?;
-    }
-
-    Ok(())
 }
 
 fn parse_terminal_export(

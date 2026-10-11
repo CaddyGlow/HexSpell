@@ -728,3 +728,13 @@ fn test_macho_llvm_sections() {
     assert_eq!(llvm.len(), 1);
     assert_eq!(llvm[0].name(), "__bundle");
 }
+
+#[test]
+fn test_macho_export_trie_rejects_cycles_without_recursing() {
+    // Root has one edge whose child offset points back to the root.
+    let cyclic = [0, 1, b'a', 0];
+    assert!(matches!(
+        macho::dyld::decode_export_trie(&cyclic),
+        Err(hexspell::errors::FileParseError::InvalidFileFormat)
+    ));
+}
