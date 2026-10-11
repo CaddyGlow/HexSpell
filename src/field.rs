@@ -50,8 +50,11 @@ impl ByteOrder {
     }
 
     pub fn read_u16(self, buffer: &[u8], offset: usize) -> Result<u16, FileParseError> {
+        let end = offset
+            .checked_add(2)
+            .ok_or(FileParseError::BufferOverflow)?;
         let bytes: [u8; 2] = buffer
-            .get(offset..offset + 2)
+            .get(offset..end)
             .ok_or(FileParseError::BufferOverflow)?
             .try_into()
             .map_err(|_| FileParseError::BufferOverflow)?;
@@ -62,8 +65,11 @@ impl ByteOrder {
     }
 
     pub fn read_u32(self, buffer: &[u8], offset: usize) -> Result<u32, FileParseError> {
+        let end = offset
+            .checked_add(4)
+            .ok_or(FileParseError::BufferOverflow)?;
         let bytes: [u8; 4] = buffer
-            .get(offset..offset + 4)
+            .get(offset..end)
             .ok_or(FileParseError::BufferOverflow)?
             .try_into()
             .map_err(|_| FileParseError::BufferOverflow)?;
@@ -74,8 +80,11 @@ impl ByteOrder {
     }
 
     pub fn read_u64(self, buffer: &[u8], offset: usize) -> Result<u64, FileParseError> {
+        let end = offset
+            .checked_add(8)
+            .ok_or(FileParseError::BufferOverflow)?;
         let bytes: [u8; 8] = buffer
-            .get(offset..offset + 8)
+            .get(offset..end)
             .ok_or(FileParseError::BufferOverflow)?
             .try_into()
             .map_err(|_| FileParseError::BufferOverflow)?;

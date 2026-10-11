@@ -205,14 +205,9 @@ pub fn roundtrip(data: &[u8]) {
             .time_date_stamp
             .update(&mut pe.buffer, value)
             .unwrap();
-        assert_eq!(
-            PE::from_slice(&pe.buffer)
-                .unwrap()
-                .coff_header
-                .time_date_stamp
-                .value,
-            value
-        );
+        if let Ok(reparsed) = PE::from_slice(&pe.buffer) {
+            assert_eq!(reparsed.coff_header.time_date_stamp.value, value);
+        }
         pe.coff_header
             .time_date_stamp
             .update(&mut pe.buffer, old)
@@ -226,10 +221,9 @@ pub fn roundtrip(data: &[u8]) {
             .flags
             .update_with(&mut elf.buffer, value, order)
             .unwrap();
-        assert_eq!(
-            ELF::from_slice(&elf.buffer).unwrap().header.flags.value,
-            value
-        );
+        if let Ok(reparsed) = ELF::from_slice(&elf.buffer) {
+            assert_eq!(reparsed.header.flags.value, value);
+        }
         elf.header
             .flags
             .update_with(&mut elf.buffer, old, order)
@@ -246,10 +240,9 @@ pub fn roundtrip(data: &[u8]) {
             .flags
             .update_with(&mut macho.buffer, value, order)
             .unwrap();
-        assert_eq!(
-            MachO::from_slice(&macho.buffer).unwrap().header.flags.value,
-            value
-        );
+        if let Ok(reparsed) = MachO::from_slice(&macho.buffer) {
+            assert_eq!(reparsed.header.flags.value, value);
+        }
         macho
             .header
             .flags

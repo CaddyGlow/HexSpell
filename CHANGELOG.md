@@ -22,11 +22,20 @@
 
 ## [Unreleased]
 
+- **General**
+    - *Fixed*: Return `BufferOverflow` for integer reads whose file offsets overflow `usize`.
+
+- **PE**
+    - *Fixed*: Reject cyclic or excessively deep resource directory trees instead of overflowing the stack.
+
 - **ELF**
     - *Fixed*: Reject overflowing extended section-table offsets instead of panicking.
+    - *Fixed*: Validate init/fini array extents before reserving entry storage.
+    - *Fixed*: Validate symbol table extents before reserving entry storage.
 
 - **Mach-O**
     - *Fixed*: Reject cyclic export tries using an iterative traversal instead of overflowing the call stack.
+    - *Fixed*: Validate symbol table extents before reserving entry storage.
 
 
 ## [1.2.0] - 2026-10-11

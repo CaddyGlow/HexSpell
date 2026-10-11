@@ -87,14 +87,18 @@ impl SymbolTable {
             return Err(FileParseError::BufferOverflow);
         }
 
+        let table_size = nsyms
+            .checked_mul(entry_size)
+            .ok_or(FileParseError::BufferOverflow)?;
+        let sym_end = symoff
+            .checked_add(table_size)
+            .ok_or(FileParseError::BufferOverflow)?;
+        buffer
+            .get(symoff..sym_end)
+            .ok_or(FileParseError::BufferOverflow)?;
         let mut symbols = Vec::with_capacity(nsyms);
         for i in 0..nsyms {
-            let off = symoff
-                .checked_add(i * entry_size)
-                .ok_or(FileParseError::BufferOverflow)?;
-            if buffer.len() < off + entry_size {
-                return Err(FileParseError::BufferOverflow);
-            }
+            let off = symoff + i * entry_size;
 
             let n_strx = order.read_u32(buffer, off)?;
             let n_type = buffer[off + 4];
@@ -144,4 +148,24 @@ fn resolve_name(
         .ok_or(FileParseError::BufferOverflow)?;
     let stop = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
     Ok(String::from_utf8_lossy(&slice[..stop]).into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_symbol_count_beyond_buffer_before_allocating() {
+        let symtab = SymtabCommand {
+            symoff: Field::new(0, 0, 4),
+            nsyms: Field::new(u32::MAX, 0, 4),
+            stroff: Field::new(0, 0, 4),
+            strsize: Field::new(0, 0, 4),
+        };
+
+        assert!(matches!(
+            SymbolTable::parse(&[], &symtab, true, ByteOrder::Little),
+            Err(FileParseError::BufferOverflow)
+        ));
+    }
 }

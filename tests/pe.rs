@@ -1051,6 +1051,20 @@ fn test_pe_resource_tree_synthetic() {
     }
 }
 
+#[test]
+fn test_pe_resource_tree_rejects_directory_cycle() {
+    use pe::resource::ResourceTree;
+
+    let mut buffer = vec![0u8; 24];
+    buffer[14..16].copy_from_slice(&1u16.to_le_bytes());
+    buffer[20..24].copy_from_slice(&0x8000_0000u32.to_le_bytes());
+
+    assert!(matches!(
+        ResourceTree::parse(&buffer, 0, |_| Ok(0)),
+        Err(FileParseError::InvalidFileFormat)
+    ));
+}
+
 /// Synthetic debug directory entry.
 #[test]
 fn test_pe_debug_directory_synthetic() {
