@@ -27,6 +27,7 @@ back to disk when you need to patch an executable.
 - **PE generation** (`write` feature with `pe`) — construct x86/x64 EXEs and DLLs from section bytes, with imports, exports, relocations, TLS, and resources.
 - **Resource editing** (`write` feature with `pe`) — edit lossless owned trees transactionally; helpers for manifests, strings, versions, and icons.
 - **ELF and Mach-O writers** (`elf,write`, `macho,write`) — owned construction, checked layouts, scoped dynamic linking, TLS/unwind metadata and transactional custom-data/FAT edits; Mach-O uses external signing. See the [generation guide](docs/guide.md#elf-and-mach-o-generation-and-transactional-editing) and [validation matrix](docs/elf-macho-generation-validation.md).
+- **Signature containers** (`write` with `pe`, `elf`, or `macho`) — edit PE certificate tables, Linux appended PKCS#7 trailers, and Mach-O signature blobs for external signers. See the [signing guide](docs/guide.md#signature-containers-and-external-signers).
 - **Lazy parsers** — imports, exports, TLS, exceptions, symbols, and other tables parsed on demand.
 - **Endianness-aware** — ELF and Mach-O byte order handled via `ByteOrder`.
 

@@ -635,3 +635,123 @@ python3 tests/scripts/elf-macho-runtime.py /tmp/hexspell-elf-macho
 See the [implementation plan](elf-macho-generation-plan.md) and
 [validation matrix](elf-macho-generation-validation.md) for implementation milestones,
 supported loader profiles and recorded native acceptance evidence.
+
+
+## Signature containers and external signers
+
+Enable `write` with the appropriate format. These APIs edit containers and leave
+cryptographic signing, hash rules, certificate-chain verification and policy to
+an external signing library such as `signcode-rs` or Apple `codesign`.
+
+### PE certificate tables
+
+`PE::owned_certificates()` copies each `WIN_CERTIFICATE` revision, type, opaque
+payload and alignment padding. `CertificateTableOwned::serialize()` preserves
+unknown records and fitting original padding; resized padding is zero-filled.
+`append_certificate`, `replace_certificates` and `remove_certificates` update the
+security directory and PE checksum transactionally. Existing tables must be
+isolated EOF overlays. Bytes preceding the table remain in place; post-table
+overlays and aliases into sections, debug payloads or COFF metadata are rejected.
+An absent physical security directory slot is rejected rather than growing headers.
+
+```rust
+# #[cfg(all(feature = "pe", feature = "write"))] {
+use hexspell::pe::{PE, certificate::CertificateOwned};
+# fn attach(image: &mut PE, pkcs7: Vec<u8>) -> Result<(), hexspell::errors::FileParseError> {
+image.append_certificate(&CertificateOwned::pkcs_signed_data(pkcs7))?;
+let records = image.owned_certificates()?;
+image.replace_certificates(&records)?;
+image.remove_certificates()?;
+# Ok(()) }
+# }
+```
+
+Payload attachment does not imply a valid signature. Finish image edits before
+signing; the signing backend must apply Authenticode digest rules, including any
+EOF alignment needed for an unsigned input. Appending a record preserves existing
+record bytes but does not assert that existing signatures remain valid.
+
+### Mach-O embedded signatures
+
+`MachO::code_signature()` exposes the real `dataoff` and `datasize` Fields from
+`LC_CODE_SIGNATURE`; `code_signature_data()` returns its bounded opaque blob.
+Reading works independently of `write`. Duplicate commands are rejected.
+
+Writing supports thin little-endian x86-64/arm64 images with an isolated final
+`__LINKEDIT` and unused load-command padding. `reserve_code_signature(size)`
+reuses equal-size existing reservations without changing their bytes; otherwise it
+creates/replaces the command, aligns its blob to 16 bytes, and updates the segment
+file/virtual extents without moving existing payloads. It returns the final
+`signing_range` and `signature_range`. The signer must hash the prepared image,
+then call `write_code_signature(blob)` with exactly the reserved byte count.
+Every byte outside the blob remains unchanged during installation. Resizing
+requires reserving again and recomputing the digest. The full blob is opaque,
+including Apple SuperBlob indexes, CodeDirectories, CMS and entitlement data.
+
+`remove_code_signature()` removes a supported final command/blob transactionally.
+Unknown reference-bearing commands, aliased ranges and overlapping mappings are
+rejected. For FAT files, edit/rebuild the selected thin slice using the FAT helpers;
+this API does not directly change a FAT container. Verify the result with the
+signing backend and platform tools before execution.
+
+### ELF signature storage
+
+ELF can store signature bytes in a custom section or note, but it has no universal
+PE-style certificate table or Mach-O-style signing command. Such bytes need an
+agreed verifier and digest/exclusion scheme; an ordinary loader does not gain a
+verification policy simply because a signature section exists.
+
+Linux kernel module signing uses an appended signature outside the ELF container,
+not an ELF section ([kernel documentation](https://www.kernel.org/doc/html/latest/admin-guide/module-signing.html)).
+IMA commonly stores signatures in the filesystem `security.ima` extended attribute;
+appended module-style signatures are another policy-dependent option
+([Linux integrity documentation](https://github.com/linux-integrity/ima-doc/blob/main/ima-concepts.rst)).
+HexSpell supports the modern Linux module-style PKCS#7 appended container:
+
+- `ELF::appended_signature()` lazily reads the outermost trailer; the standalone
+  `signature::AppendedSignature::parse()` also accepts raw byte buffers.
+- `AppendedSignature` exposes real `Field` offsets for all twelve metadata bytes,
+  plus `signed_range`, `signature_range`, `signed_data(buffer)` and `data(buffer)`.
+  `sig_len` is **big endian even in little-endian ELF files**.
+- With `elf,write`, `set_appended_signature(pkcs7)` appends or replaces the outermost
+  trailer; `remove_appended_signature()` removes only that trailer. Both preserve
+  the signed prefix exactly and reject malformed trailers or ELF-owned extents
+  which alias the signature. Existing prefix overlays and earlier stacked trailers
+  are retained. No header offsets, checksum fields or padding bytes are introduced.
+
+```rust
+# #[cfg(all(feature = "elf", feature = "write"))] {
+use hexspell::elf::ELF;
+# fn attach(image: &mut ELF, detached_cms: &[u8]) -> Result<(), hexspell::errors::FileParseError> {
+image.set_appended_signature(detached_cms)?;
+let trailer = image.appended_signature()?.unwrap();
+let signed_payload = trailer.signed_data(&image.buffer)?;
+let signature = trailer.data(&image.buffer)?;
+# let _ = (signed_payload, signature);
+image.remove_appended_signature()?;
+# Ok(()) }
+# }
+```
+
+The wire format is `[signed prefix][opaque CMS][12-byte metadata][28-byte marker]`.
+The type is 2 (PKCS#7), all unused metadata is zero, and the length is a big-endian
+u32. Legacy non-PKCS#7 types are unsupported. A complete EOF marker with malformed
+metadata is an error; absent or partial markers are not detected as signatures.
+This is an opaque container API: it does not parse CMS, create hashes, establish
+trust, or enable kernel appraisal. Finish all ELF edits before signing the exact
+prefix, including any overlay bytes. Any later prefix modification invalidates
+its signature. Operate on decompressed ELF bytes, not `.ko.xz` or `.ko.zst` wrappers.
+
+Debian uses this Linux appended-signature mechanism for kernel modules; DKMS can
+sign locally built modules for Secure Boot ([Debian Secure Boot documentation](https://wiki.debian.org/SecureBoot)).
+Ordinary Debian programs generally rely on APT's authenticated repository metadata
+and package checksums, not per-ELF embedded signatures
+([apt-secure](https://manpages.debian.org/testing/apt/apt-secure.8.en.html)).
+Custom ELF sections/notes remain available for application-specific schemes.
+
+```sh
+cargo run --features elf,write --example elf_signature -- attach module.ko signature.p7s signed.ko
+cargo run --features elf,write --example elf_signature -- extract signed.ko payload.ko signature.p7s
+cargo run --features elf,write --example elf_signature -- roundtrip signed.ko copied.ko
+cargo run --features elf,write --example elf_signature -- remove signed.ko unsigned.ko
+```

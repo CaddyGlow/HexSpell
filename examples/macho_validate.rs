@@ -40,6 +40,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = image.chained_fixups()?;
             println!("reparsed {} commands and {} sections", image.load_commands.len(), image.sections.len());
         }
+        Some("signature-roundtrip") if args.len() == 3 => {
+            let mut image = validate(std::fs::read(&args[1])?)?;
+            let blob = image.code_signature_data()?.ok_or("expected signed image")?.to_vec();
+            let original = image.buffer.clone();
+            let layout = image.reserve_code_signature(u32::try_from(blob.len())?)?;
+            if image.buffer[layout.signing_range.clone()] != original[layout.signing_range] {
+                return Err("signature reservation changed signed content; a new digest is required".into());
+            }
+            image.write_code_signature(&blob)?;
+            if image.buffer != original { return Err("signature round-trip changed bytes".into()); }
+            std::fs::write(&args[2], image.buffer)?;
+        }
         Some("pack") if args.len() >= 4 => {
             let mut images = Vec::new();
             for path in &args[2..] { images.push(validate(std::fs::read(path)?)?); }
@@ -59,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             validate(slice.to_vec())?;
             std::fs::write(&args[3], slice)?;
         }
-        _ => return Err("usage: macho_validate validate FILE | pack OUTPUT THIN THIN... | extract FAT INDEX OUTPUT".into()),
+        _ => return Err("usage: macho_validate validate FILE | signature-roundtrip SIGNED OUTPUT | pack OUTPUT THIN THIN... | extract FAT INDEX OUTPUT".into()),
     }
     Ok(())
 }

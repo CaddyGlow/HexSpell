@@ -1,5 +1,10 @@
 //! Authenticode certificate table (`IMAGE_DIRECTORY_ENTRY_SECURITY`).
 
+#[cfg(feature = "write")]
+mod edit;
+#[cfg(feature = "write")]
+pub use edit::*;
+
 use alloc::vec::Vec;
 
 use crate::errors::FileParseError;

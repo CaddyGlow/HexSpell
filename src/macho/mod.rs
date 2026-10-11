@@ -13,6 +13,7 @@ use alloc::vec::Vec;
 pub mod bitcode;
 #[cfg(feature = "write")]
 pub mod build;
+pub mod code_signature;
 pub mod dyld;
 #[cfg(feature = "write")]
 pub mod edit;

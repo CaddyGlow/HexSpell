@@ -71,6 +71,15 @@ def main():
         raise ValueError('native imported hello output mismatch')
     report['gates']['hello_import_sign_reparse'] = 'passed'
 
+    signature_copy = output / 'hello-signature-roundtrip'
+    example('macho_validate', 'signature-roundtrip', hello, signature_copy)
+    os.chmod(signature_copy, 0o755)
+    run('codesign', '--verify', '--strict', signature_copy)
+    if run(*prefix, signature_copy) != 'Hello, Mach-O!\n':
+        raise ValueError('signature container round-trip changed native hello behavior')
+    report['gates']['signature_container_roundtrip'] = 'passed'
+
+
     example('macho_dylib', target, library)
     inspect(library)
     sign(library)

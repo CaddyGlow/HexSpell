@@ -81,3 +81,11 @@ required-features = ["std", "macho", "write"]
 [[example]]
 name = "macho_edit"
 required-features = ["std", "macho", "write"]
+
+[[example]]
+name = "pe_certificates"
+required-features = ["std", "pe", "write"]
+
+[[example]]
+name = "elf_signature"
+required-features = ["std", "elf", "write"]

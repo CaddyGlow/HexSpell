@@ -19,13 +19,15 @@ method call; “Eager” structures are filled during `from_buffer`.
 | COFF symbol table + strtab | Modeled | Lazy — `PE::coff_symbols` | Long section names via `strings::pe_section_name` |
 | Bound / delay-load imports | Modeled | Lazy | |
 | Load config (base fields) | Modeled | Lazy | Cookie at byte 60 (PE32) / 88 (PE32+); Size >= 64 / 96, with the full declared extent present. Affinity is modeled in both layouts. Larger versions accepted; trailing fields generally unmodeled. |
-| Rich header / certs / CLR / ARM64x | Modeled | Lazy — `rich_header`, `certificates`, `clr`, `architecture_data` | Read-only certs |
+| Rich header / certs / CLR / ARM64x | Modeled | Lazy — `rich_header`, `certificates`, `clr`, `architecture_data` | Certificates expose bounded opaque records |
 | Line numbers (COFF) | Modeled | Lazy — `section_linenumbers` | |
 | Section rename / remove / layout sync | Partial | `layout::rename_section`, `remove_section`, `sync_layout` | Aligned raw data and overlay/file-pointer preservation tested against pefile. Embedded code/data RVAs and entry-point rebuilding after middle-section removal remain partial. |
 | PE32 / PE32+ construction | Supported (`pe,write`) | `build::PeBuilder` | Owned sections/symbols, checked layout, imports, local exports, fixups/base relocations, TLS, caller-supplied x64 unwind data; returns ordinary `PE` |
 | Resource payloads / owned trees | Supported (`pe,write`) | `ResourceDataEntry::payload`, `PE::owned_resources` | Complete file-backed extents; raw UTF-16 keys and unknown payloads preserved |
 | Resource serialization / editing | Supported (`pe,write`) | `ResourceDirectoryOwned::serialize`, `PE::replace_resources` | Transactional append; existing RVAs retained; explicit signature policy; no compaction |
 | Typed resources | Partial (`pe,write`) | `resource::{Manifest, strings, version, icon}` | String blocks/languages, nested version blocks, ICO/group IDs; other types remain opaque |
+
+| Certificate table editing | Scoped (`pe,write`) | `owned_certificates`, `append_certificate`, `replace_certificates`, `remove_certificates` | Lossless owned records, aligned serialization, isolated EOF tables, directory/checksum updates; no cryptography |
 
 ## ELF (Linux / BSD)
 
@@ -47,6 +49,8 @@ method call; “Eager” structures are filled during `from_buffer`.
 | Loader lifecycle / TLS / unwind generation | Scoped (`elf,write`) | `add_initializer`, `add_finalizer`, `add_tls_template`, `add_tls_address_slot`, `add_eh_frame` | Shared-object lifecycle; Linux AMD64 general-dynamic TLS; caller CIE/FDE records plus GNU EH-frame index |
 | Custom-data / loader-string editing | Scoped (`elf,write`) | `edit::ElfEdit` | Replace/grow/add/remove isolated nonallocated data, rename, owned notes, bounded interpreter/NEEDED/SONAME/RUNPATH; explicit stale/remove build-ID policy; mapped VAs preserved |
 
+| Appended Linux signatures | Scoped | `appended_signature`, `signature::AppendedSignature`; `set_appended_signature`, `remove_appended_signature` with `elf,write` | Modern PKCS#7 trailer, big-endian length, bounded opaque data and exact signed prefix, transactional alias-checked replacement/removal; no cryptography or kernel trust |
+
 ## Mach-O (macOS)
 
 | Area | Status | Access | Notes |
@@ -65,6 +69,7 @@ method call; “Eager” structures are filled during `from_buffer`.
 | Chained fixups | Modeled | Lazy — `chained_fixups`, `decode_chained_fixups`, `decode_chained_pointer` | PTR64_OFFSET decoding with bounded name/page expansion; edits inventory live chain slots; authenticated arm64e writer excluded |
 | Lifecycle / TLV / unwind generation | Scoped (`macho,write`) | `add_initializers`, `add_terminators`, `add_thread_local`, `add_unwind` | Ordered initializer arrays, generated libSystem `__cxa_atexit` termination registration, one initialized Apple TLV template/descriptor, caller-encoded EH frame; no compact-unwind synthesis |
 | Custom-data editing | Scoped (`macho,write`) | `edit::MachOEdit`, `edit_fat_slice`, `rebuild_fat_slice` | Replace/grow/add checked custom data, bounded dylib/RPATH names, explicit signature stripping/external re-signing, selected FAT slice rebuilding; mapped VAs and unselected slice bytes preserved |
+| Embedded signature containers | Scoped | `code_signature`, `code_signature_data`; `reserve_code_signature`, `write_code_signature`, `remove_code_signature` with `macho,write` | Read opaque command/blob; reserve final metadata before hashing; fixed-size installation; thin LE x86-64/arm64 final __LINKEDIT only; no cryptography |
 
 ## Cross-format (core crate)
 

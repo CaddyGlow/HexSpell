@@ -1049,3 +1049,8 @@ where
     *buffer = rebuilt;
     Ok(report)
 }
+
+// Signature reservations may consume only padding not referenced by loader metadata.
+pub(super) fn validate_signature_padding(image: &mut MachO, target: &Range<usize>) -> Result<()> {
+    MachOEdit::new(image)?.validate_commands(target)
+}

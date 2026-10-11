@@ -364,7 +364,7 @@ impl<B: core::ops::Deref<Target = [u8]>> PE<B> {
             return Ok(None);
         }
         let entry = &self.optional_header.data_directories[header::SECURITY];
-        if entry.virtual_address.value == 0 || entry.size.value == 0 {
+        if entry.virtual_address.value == 0 && entry.size.value == 0 {
             return Ok(None);
         }
         Ok(Some(certificate::CertificateTable::parse(

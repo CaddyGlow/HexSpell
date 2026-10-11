@@ -29,6 +29,7 @@ pub mod note;
 pub mod program;
 pub mod relocation;
 pub mod section;
+pub mod signature;
 pub mod symbol;
 pub mod unwind;
 pub mod version;

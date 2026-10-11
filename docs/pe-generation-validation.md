@@ -110,3 +110,25 @@ data generation remain out of scope. Resource replacement appends a new resource
 region and reports signature invalidation or stripping. Version block preservation
 retains semantic unknown data rather than original padding bytes. Export ordinals
 are restricted to 1–65535 to match the existing parser interface.
+
+
+## Certificate-container API acceptance
+
+Validated on 2026-10-12 with generated x86 PE32 and x64 PE32+ Hello images.
+The local `signcode-rs` CLI signed each image using a temporary RSA code-signing
+leaf certificate issued by a temporary test CA. The `pe_certificates roundtrip`
+example exercised owned import, removal, append and replacement. Output was
+byte-for-byte identical to the signed input, and `signcode verify` accepted the
+result against the test CA. No keys, certificates or executable outputs are
+committed. This is test-CA interoperability, not Windows production trust acceptance.
+
+```sh
+cargo run --features pe,write --example pe_certificates -- roundtrip signed.exe roundtrip.exe
+signcode verify roundtrip.exe --ca-file test-root.pem --ignore-cdp
+cargo run --features pe,write --example pe_certificates -- remove signed.exe unsigned.exe
+```
+
+Regression coverage is in `tests/pe_certificates.rs`, including unknown records,
+nonzero padding, malformed directories, non-EOF overlays, debug/COFF aliases,
+checksum updates and transactional rollback. The APIs require `pe,write`, add
+no runtime dependencies and pass the embedded `no_std` and Rust 1.88 checks.

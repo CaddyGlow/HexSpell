@@ -152,3 +152,54 @@ lifecycle dispatch. These gates are distinct from successful Linux parsing.
 The ELF placement rules follow the [generic ABI program-loading specification](https://gabi.xinuos.com/elf/07-pheader.html).
 Mach-O command layouts follow Apple's [loader definitions](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/EXTERNAL_HEADERS/mach-o/loader.h),
 and chained pointer layouts follow Apple's [fixup definitions](https://raw.githubusercontent.com/apple-oss-distributions/dyld/main/include/mach-o/fixup-chains.h).
+
+
+## Embedded-signature container API acceptance
+
+Validated on 2026-10-12 using the existing arm64 macOS host, with native arm64 and
+x86-64 under Rosetta 2. `macho-runtime.py` now includes
+`signature_container_roundtrip`: reuse the final signature reservation, reinstall
+its original opaque blob, require byte-for-byte identity, verify using
+`codesign --verify --strict`, then execute the Hello image. All eight acceptance
+gates passed for each architecture. Equal-size reservations preserve Apple's
+segment rounding, including the 16 KiB rounding observed on x86-64 outputs.
+Changing capacity requires a new digest; cryptographic signing is external.
+
+```sh
+cargo run --features macho,write --example macho_validate -- signature-roundtrip SIGNED OUTPUT
+codesign --verify --strict OUTPUT
+```
+
+`tests/macho_signatures.rs` covers new reservations, fixed-size installation,
+replacement/removal, signed-prefix preservation, external segment rounding,
+unknown commands, padding/section/segment aliases, duplicate commands, malformed
+extents, overflow and rollback. APIs pass `no_std + alloc` and Rust 1.88 checks.
+
+
+## Linux appended-signature acceptance
+
+Validated on 2026-10-12 with upstream Linux v6.12 `scripts/sign-file` (compiled
+locally with OpenSSL) and a synthetic compiler-generated relocatable ELF object.
+The `elf-signature-runtime.py` harness passed for SHA-256 and SHA-512:
+
+- HexSpell attachment from the oracle's detached PKCS#7 was byte-for-byte identical
+  to the complete `sign-file` output, including the metadata and EOF marker.
+- Removing and reattaching the signature preserved the complete file exactly.
+- Extraction/removal recovered the original unsigned object byte-for-byte.
+- OpenSSL CMS verified both detached signatures over the recovered prefix.
+  `-noverify` bypassed certificate-chain trust, not signature/content checking.
+
+No kernel module was loaded; this validates the container and CMS interoperability,
+not module ABI compatibility, Secure Boot enrollment or kernel trust policy. Test
+keys, objects and certificates were generated outside the repository. The oracle
+sources were not vendored ([upstream v6.12 sign-file](https://github.com/torvalds/linux/blob/v6.12/scripts/sign-file.c)).
+
+```sh
+python3 tests/scripts/elf-signature-runtime.py /tmp/hexspell-appended --sign-file /path/to/scripts/sign-file
+```
+
+Rust tests cover ELF32/64 in both byte orders, executable/relocatable headers,
+NOBITS ranges, overlays, stacked trailers, metadata offsets, network-order lengths,
+malformed trailers, aliases into sections/programs/header tables and rollback.
+Default/all-feature tests, warning-free Clippy, ELF read-only and ELF writer feature
+checks, fuzz smoke tests, embedded `no_std + alloc`, and Rust 1.88 checks passed.

@@ -128,3 +128,40 @@ are pinned by dyld; their termination gate checks process-exit callbacks rather
 than assuming that `dlclose` unloads the image. Reports record target architecture,
 tool versions and individual passed gates. Structural checks never substitute for
 native acceptance; see the [recorded matrix](../../docs/elf-macho-generation-validation.md).
+
+
+### Signature-container interoperability
+
+The native Mach-O script also exercises the dedicated reserve/write API with a
+real Apple-signed Hello image, requires byte-for-byte identity, verifies the
+signature and executes the result. `tests/macho_signatures.rs` supplies malformed
+layout and rollback regressions without requiring macOS.
+
+For PE, `pe_certificates` exercises owned certificate-table import, removal,
+append and replacement. It performs no cryptographic operation; sign and verify
+using `signcode-rs` or another Authenticode implementation:
+
+```sh
+cargo run --features pe,write --example pe_certificates -- roundtrip signed.exe roundtrip.exe
+signcode verify roundtrip.exe --ca-file test-root.pem --ignore-cdp
+```
+
+See `docs/pe-generation-validation.md` and
+`docs/elf-macho-generation-validation.md` for the recorded test-CA/native results.
+
+
+### Linux appended-signature interoperability
+
+`elf-signature-runtime.py` compiles a synthetic relocatable ELF object, signs it
+using Linux `scripts/sign-file` with SHA-256 and SHA-512, compares HexSpell attachment
+and round-trip output byte-for-byte, extracts/removes the trailer, and checks the
+CMS signature using OpenSSL. OpenSSL's `-noverify` skips certificate-chain trust;
+it still verifies the signature and content. This does not load a kernel module
+or assert kernel trust. Requires Cargo, a C compiler, OpenSSL and `sign-file`:
+
+```sh
+python3 tests/scripts/elf-signature-runtime.py /tmp/hexspell-appended --sign-file /usr/lib/linux-kbuild-VERSION/scripts/sign-file
+```
+
+All generated objects, test keys and certificates stay in the output directory.
+Pure Rust malformed-input, endian and alias tests are in `tests/elf_signatures.rs`.

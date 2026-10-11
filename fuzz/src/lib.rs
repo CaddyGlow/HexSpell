@@ -25,6 +25,7 @@ pub fn parse(data: &[u8]) {
         return;
     }
     let _ = macho::dyld::decode_chained_fixups(data);
+    let _ = elf::signature::AppendedSignature::parse(data);
     if let Ok(view) = pe::view::PeHeaders::parse(data) {
         let _ = view.magic();
         for i in 0..16 {
@@ -127,6 +128,7 @@ pub fn parse(data: &[u8]) {
     assert_eq!(borrowed.is_ok(), owned.is_ok());
     if let Ok(elf) = borrowed {
         let owned = owned.unwrap();
+        let _ = elf.appended_signature();
         assert_eq!(elf.buffer, owned.buffer);
         assert_eq!(elf.section_headers.len(), owned.section_headers.len());
         assert_eq!(elf.program_headers.len(), owned.program_headers.len());
@@ -409,6 +411,13 @@ pub fn runtime_generation(data: &[u8]) {
     edit.add_custom_section(".new", bytes).unwrap();
     edit.commit().unwrap();
     parse(&image.buffer);
+    let unsigned = image.buffer.clone();
+    image.set_appended_signature(if bytes.is_empty() { &[0] } else { bytes }).unwrap();
+    let signature = image.appended_signature().unwrap().unwrap();
+    assert_eq!(signature.signed_data(&image.buffer).unwrap(), unsigned);
+    parse(&image.buffer);
+    image.remove_appended_signature().unwrap();
+    assert_eq!(image.buffer, unsigned);
 
     use macho::build::{FixupKind, MachOBuilder, SectionSpec as MachSection, SegmentSpec as MachSegment, Version};
     let target = if data.first().copied().unwrap_or(0) & 1 == 0 { macho::build::Target::X86_64 } else { macho::build::Target::Arm64 };

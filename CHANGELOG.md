@@ -28,9 +28,11 @@
     - *Changed*: **Breaking** — package version becomes 2.0.0. `default-features = false` now disables formats and the public common helper interface. Enable `pe,elf,macho,common` explicitly to retain the previous no-std surface.
 
 - **PE**
+    - *Added*: Owned opaque certificate tables and transactional append/replace/remove APIs with aligned serialization, directory/checksum updates and EOF/alias checks under `pe,write`.
     - *Added*: Opt-in `pe,write` feature (disabled by default) for dependency-free PE32/PE32+ construction with owned sections, builder-specific handles, resolved layouts, imports, local exports, checked fixups, base relocations, TLS, and x64 runtime-function registration.
     - *Added*: Lossless owned resource trees, canonical serialization, transactional append editing, explicit certificate preservation/stripping outcomes, and manifest/string/version/icon helpers.
     - *Added*: Linux generation examples for Hello EXEs and callable DLLs, matching Windows loaders, independent PE inspection, and Windows acceptance scripts.
+    - *Fixed*: Reject inconsistent zero/nonzero security-directory pairs when reading certificates instead of reporting an unsigned image.
     - *Fixed*: Mask resource-name high bits and check resource metadata/payload extents, aggregate traversal work, and certificate aliases before editing.
     - *Fixed*: Place inserted sections after complete occupied raw/virtual extents; reject invalid alignment before mutation and include header growth/overlays in insertion plans.
     - *Fixed*: Reject resource edits whose declared directory slots extend beyond the physical optional header, and reparse edited bytes before committing. Reject overflowing insertion extents before mutation and named x86 import RVAs that collide with the ordinal flag.
@@ -38,6 +40,7 @@
 
 
 - **ELF**
+    - *Added*: Lazy modern Linux appended PKCS#7 signature parsing with on-disk metadata Fields and exact signed/payload ranges; transactional append/replace/remove under `elf,write`, preserving prefix bytes and rejecting ELF-range aliases.
     - *Added*: Opt-in `elf,write` owned Linux AMD64 construction with checked segment/section placement, symbols, fixups, zero-fill and optional section headers; explicit-layout ELF32/64 serialization in either byte order with extended-count encodings.
     - *Added*: Scoped Linux PIE/shared-object construction with explicit interpreters, versioned imports/exports, symbol visibility, eager import slots, SysV hashes, SONAME/RUNPATH and RELA pointer relocations; native loader examples and checks.
     - *Added*: Program-header fallback for stripped ELF dynamic arrays/symbols, with bounded SysV/GNU hash counts and file-backed mapping validation.
@@ -46,6 +49,7 @@
     - *Fixed*: Preserve default-visible global/weak symbol preemption in generated initializer and finalizer arrays, consistently with ordinary pointer relocations.
 
 - **Mach-O**
+    - *Added*: Lazy embedded-signature command/blob access and transactional reserve/write/remove APIs under `macho,write`; final metadata is prepared before external hashing, and installation preserves every byte outside the blob.
     - *Added*: Opt-in `macho,write` thin x86-64/arm64 construction with deployment targets, symbols, entry commands, zero-fill and checked architecture fixups; macOS 13+ dyld imports/ASCII exports, chained pointer binding/rebasing, dependencies and RPATHs; output requires external signing.
     - *Added*: Transactional custom-section replacement/growth/addition with offset-consumer checks and mapped-address preservation; explicit supported signature stripping and external re-signing reports.
     - *Added*: Capacity-checked dylib/RPATH string edits, fixed-capacity FAT edits and selected-slice resizing through canonical FAT rebuilding.
