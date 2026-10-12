@@ -1052,5 +1052,19 @@ where
 
 // Signature reservations may consume only padding not referenced by loader metadata.
 pub(super) fn validate_signature_padding(image: &mut MachO, target: &Range<usize>) -> Result<()> {
+    for command in &image.load_commands {
+        if command.cmd.value == super::load_command::LC_MAIN {
+            if command.cmdsize.value != 24 {
+                return Err(FileParseError::InvalidFileFormat);
+            }
+            // Executable entry bytes need not belong to a section.
+            let entry = image
+                .byte_order()
+                .read_u64(&image.buffer, command.cmd.offset + 8)?;
+            if (target.start as u64..target.end as u64).contains(&entry) {
+                return Err(unsupported());
+            }
+        }
+    }
     MachOEdit::new(image)?.validate_commands(target)
 }

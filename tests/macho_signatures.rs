@@ -166,6 +166,33 @@ fn malformed_aliases_and_duplicate_signature_commands_are_rejected() {
 }
 
 #[test]
+fn reservation_rejects_entry_points_in_command_padding() {
+    for target in [Target::X86_64, Target::Arm64] {
+        for delta in [0, 8, 12, 15, 16] {
+            let mut macho = image(target);
+            let padding = 32 + macho.header.sizeofcmds.value as usize;
+            let command = macho
+                .load_commands
+                .iter()
+                .find(|c| c.cmd.value == hexspell::macho::load_command::LC_MAIN)
+                .unwrap();
+            let at = command.cmd.offset + 8;
+            macho.buffer[at..at + 8].copy_from_slice(&((padding + delta) as u64).to_le_bytes());
+            let before = macho.buffer.clone();
+
+            let result = macho.reserve_code_signature(32);
+
+            if delta < 16 {
+                assert!(result.is_err(), "entry point at padding + {delta}");
+                assert_eq!(macho.buffer, before);
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
+}
+
+#[test]
 fn equal_size_reservation_preserves_external_segment_rounding() {
     let mut macho = image(Target::X86_64);
     let layout = macho.reserve_code_signature(5001).unwrap();

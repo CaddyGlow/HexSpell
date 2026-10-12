@@ -266,11 +266,13 @@ impl PE {
         })
     }
     /// Appends one opaque record, preserving existing records and their padding.
+    /// Reads the current buffer rather than potentially stale cached directory fields.
     pub fn append_certificate(
         &mut self,
         certificate: &CertificateOwned,
     ) -> Result<CertificateEditReport> {
-        let mut table = self.owned_certificates()?;
+        let snapshot = PE::from_buffer(self.buffer.clone())?;
+        let mut table = snapshot.owned_certificates()?;
         table.certificates.push(certificate.clone());
         self.replace_certificates(&table)
     }

@@ -78,6 +78,31 @@ fn serialization_recomputes_lengths_and_zeroes_resized_padding() {
     assert_eq!(&bytes[..8], &[10, 0, 0, 0, 9, 0, 10, 0]);
     assert_eq!(&bytes[10..], &[0; 6]);
 }
+
+#[test]
+fn append_preserves_certificates_after_buffer_only_edits() {
+    for target in [Target::X86, Target::X64] {
+        for previously_signed in [false, true] {
+            let mut pe = image(target);
+            if previously_signed {
+                pe.append_certificate(&CertificateOwned::pkcs_signed_data(vec![1; 16]))
+                    .unwrap();
+            }
+            let mut edited = PE::from_buffer(pe.buffer.clone()).unwrap();
+            edited
+                .append_certificate(&CertificateOwned::pkcs_signed_data(vec![2; 17]))
+                .unwrap();
+            let mut expected = edited.owned_certificates().unwrap();
+            pe.buffer = edited.buffer;
+            let added = CertificateOwned::pkcs_signed_data(vec![3; 16]);
+            expected.certificates.push(added.clone());
+
+            pe.append_certificate(&added).unwrap();
+
+            assert_eq!(pe.owned_certificates().unwrap(), expected);
+        }
+    }
+}
 #[test]
 fn malformed_or_aliased_tables_are_rejected_without_mutation() {
     for target in [Target::X86, Target::X64] {

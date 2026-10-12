@@ -6,10 +6,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             .ok_or("usage: seed-executables OUTPUT")?,
     );
     let samples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/samples");
-    for target in ["parse", "roundtrip"] {
+    for target in ["parse", "roundtrip", "signatures"] {
         let directory = output.join(target);
         fs::create_dir_all(&directory)?;
         for (name, bytes) in hexspell_fuzz::synthetic_seeds() {
+            fs::write(directory.join(name), bytes)?;
+        }
+        for (name, bytes) in hexspell_fuzz::signature_seeds() {
             fs::write(directory.join(name), bytes)?;
         }
         for name in [

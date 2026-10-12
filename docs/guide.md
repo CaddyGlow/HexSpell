@@ -649,9 +649,11 @@ an external signing library such as `signcode-rs` or Apple `codesign`.
 payload and alignment padding. `CertificateTableOwned::serialize()` preserves
 unknown records and fitting original padding; resized padding is zero-filled.
 `append_certificate`, `replace_certificates` and `remove_certificates` update the
-security directory and PE checksum transactionally. Existing tables must be
-isolated EOF overlays. Bytes preceding the table remain in place; post-table
-overlays and aliases into sections, debug payloads or COFF metadata are rejected.
+security directory and PE checksum transactionally. Appending reads existing
+records from the current buffer, even if cached directory fields are stale.
+Existing tables must be isolated EOF overlays. Bytes preceding the table remain
+in place; post-table overlays and aliases into sections, debug payloads or COFF
+metadata are rejected.
 An absent physical security directory slot is rejected rather than growing headers.
 
 ```rust
@@ -690,7 +692,8 @@ including Apple SuperBlob indexes, CodeDirectories, CMS and entitlement data.
 
 `remove_code_signature()` removes a supported final command/blob transactionally.
 Unknown reference-bearing commands, aliased ranges and overlapping mappings are
-rejected. For FAT files, edit/rebuild the selected thin slice using the FAT helpers;
+rejected, including an `LC_MAIN` entry point in padding consumed by a reservation.
+For FAT files, edit/rebuild the selected thin slice using the FAT helpers;
 this API does not directly change a FAT container. Verify the result with the
 signing backend and platform tools before execution.
 

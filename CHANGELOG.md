@@ -26,6 +26,7 @@
     - *Added*: Independent `pe`, `elf`, `macho`, and `common` feature flags, enabled by default; core fields/errors/byte utilities remain always available.
     - *Changed*: **Breaking** — replace `pe-write`, `elf-write`, and `macho-write` with one independent `write` feature. Combine it with the desired format flags (for example, `elf,write`); `write` does not enable formats.
     - *Changed*: **Breaking** — package version becomes 2.0.0. `default-features = false` now disables formats and the public common helper interface. Enable `pe,elf,macho,common` explicitly to retain the previous no-std surface.
+    - *Chore*: Add a signature-container fuzz target and 133 deterministic PE, ELF and Mach-O seeds covering malformed containers, aliases, stacked trailers and transactional editing regressions.
 
 - **PE**
     - *Added*: Owned opaque certificate tables and transactional append/replace/remove APIs with aligned serialization, directory/checksum updates and EOF/alias checks under `pe,write`.
@@ -33,6 +34,7 @@
     - *Added*: Lossless owned resource trees, canonical serialization, transactional append editing, explicit certificate preservation/stripping outcomes, and manifest/string/version/icon helpers.
     - *Added*: Linux generation examples for Hello EXEs and callable DLLs, matching Windows loaders, independent PE inspection, and Windows acceptance scripts.
     - *Fixed*: Reject inconsistent zero/nonzero security-directory pairs when reading certificates instead of reporting an unsigned image.
+    - *Fixed*: Reparse the current buffer before appending certificates so stale cached directory fields cannot discard existing records.
     - *Fixed*: Mask resource-name high bits and check resource metadata/payload extents, aggregate traversal work, and certificate aliases before editing.
     - *Fixed*: Place inserted sections after complete occupied raw/virtual extents; reject invalid alignment before mutation and include header growth/overlays in insertion plans.
     - *Fixed*: Reject resource edits whose declared directory slots extend beyond the physical optional header, and reparse edited bytes before committing. Reject overflowing insertion extents before mutation and named x86 import RVAs that collide with the ordinal flag.
@@ -47,6 +49,7 @@
     - *Added*: Transactional nonallocated custom payload replacement/growth/addition/removal, isolated section renaming, owned notes, bounded interpreter/dynamic strings, and explicit stale/remove build-ID policies.
     - *Added*: Shared-object initializer/finalizer arrays, Linux AMD64 general-dynamic TLS, and caller-provided DWARF unwind records with a GNU EH-frame index.
     - *Fixed*: Preserve default-visible global/weak symbol preemption in generated initializer and finalizer arrays, consistently with ordinary pointer relocations.
+    - *Fixed*: Preserve inner trailers when round-tripping stacked appended signatures with the `elf_signature` example.
 
 - **Mach-O**
     - *Added*: Lazy embedded-signature command/blob access and transactional reserve/write/remove APIs under `macho,write`; final metadata is prepared before external hashing, and installation preserves every byte outside the blob.
@@ -55,6 +58,7 @@
     - *Added*: Capacity-checked dylib/RPATH string edits, fixed-capacity FAT edits and selected-slice resizing through canonical FAT rebuilding.
     - *Added*: Ordered initializer arrays, generated libSystem termination registration, scoped Apple TLV descriptors and caller-encoded EH-frame integration; native acceptance harness signs, reparses and exercises generated images.
     - *Fixed*: Reject edits overlapping live chained bind/rebase slots; validate chain mappings, page boundaries and import ordinals. Reject unmodeled legacy runtime writes instead of treating metadata extents as complete reference coverage.
+    - *Fixed*: Reject signature reservations whose load-command padding contains the `LC_MAIN` entry point.
     - *Fixed*: Bound aggregate name expansion, page-table decoding and scanning work for aliased chained-fixup metadata.
 
 ## [1.2.1] - 2026-10-11
