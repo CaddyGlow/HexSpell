@@ -11,6 +11,7 @@ method call; “Eager” structures are filled during `from_buffer`.
 | DOS / COFF / optional header P0 | Modeled | Eager on `PE::from_buffer` | PE32 + PE32+ |
 | Data directories (16 indices) | Modeled | Eager | Gated by `number_of_rva_and_sizes` |
 | Section table | Modeled | Eager | `PeSection`, `insert_section` |
+| Memory image reconstruction | Scoped (`pe,pe-reconstruct`) | `PE::from_memory_image` | Contiguous RVA-addressed PE32/PE32+ snapshots; file-aligned sections, captured virtual tails, mapped debug pointer repair, file-only metadata stripping; SectionAlignment >= 4096; no import repair or relocation reversal |
 | Imports / IAT / hint-name | Modeled | Lazy — `PE::imports` | |
 | Exports | Modeled | Lazy — `PE::exports` | Forwarders, ordinals |
 | Base relocations | Modeled | Lazy — `PE::base_relocations()` / `base_relocations_iter` | Current buffer; no cache |

@@ -123,6 +123,10 @@ jobs:
         cargo check --no-default-features --features pe,elf,macho,write --target thumbv7em-none-eabi
         cargo clippy --no-default-features --features pe,elf,macho,write --all-targets -- -D warnings
         cargo test --no-default-features --features pe,elf,macho,write
+    - name: PE memory reconstruction without std
+      run: |
+        cargo check --no-default-features --features pe,pe-reconstruct --target thumbv7em-none-eabi
+        cargo test --no-default-features --features pe,pe-reconstruct --test pe_reconstruct
 
   msrv-writers:
     runs-on: ubuntu-latest
@@ -143,6 +147,8 @@ jobs:
           - macho
           - common
           - write
+          - pe-reconstruct
+          - pe,pe-reconstruct
           - pe,write
           - elf,write
           - macho,write

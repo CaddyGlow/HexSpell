@@ -81,6 +81,56 @@ field values, offsets, and widths and checks serialized images after edits.
 The [PE benchmark tool](../tools/pe-bench/README.md) provides a reproducible
 corpus and separate parsing scopes for HexSpell, Goblin, object, and pefile.
 
+### Reconstructing a PE memory image
+
+Enable `pe-reconstruct` alongside `pe`. This independent opt-in feature adds no
+dependencies, does not require `write`, and works with `no_std + alloc`:
+
+```toml
+caddy-hexspell = { version = "2.0", default-features = false, features = ["pe", "pe-reconstruct"] }
+```
+
+Supply a contiguous snapshot starting at the image base: input offset `rva`
+contains bytes from `image_base + rva`. Headers must be present and parseable.
+With `std` enabled, a dump can be converted and saved as follows:
+
+```rust
+use hexspell::pe::PE;
+
+let memory = std::fs::read("mapped-image.bin")?;
+let reconstructed = PE::from_memory_image(&memory)?;
+reconstructed.write_file("reconstructed.exe")?;
+```
+
+The function copies each section from its RVA into newly packed, file-aligned
+storage in section-table order, preserving section RVAs, entry point, and
+ImageBase. It captures `VirtualSize` bytes, falling back to `SizeOfRawData` when
+`VirtualSize` is zero. It materializes virtual tails and `.bss` contents, including
+runtime modifications, changes materialized uninitialized-data sections to
+initialized data, and zero-pads output raw sizes to `FileAlignment`. Header/image
+sizes, code/data totals, section raw offsets/sizes, and checksum are recomputed.
+The input slice remains unchanged and the returned `PE` has ordinary file offsets
+in its `Field` values.
+
+File-only data cannot be recovered from a memory snapshot: overlays, original
+file padding, certificates, COFF symbols, section relocations/line numbers, and
+file-only debug payload references are omitted or cleared. Mapped debug payload
+pointers are rebuilt from their RVAs; malformed or partly captured debug records
+are rejected. Debug directories embedded in headers are rejected to prevent
+rewriting header fields. Other directory RVAs remain unchanged and their payloads
+are not eagerly validated.
+
+All required section bytes must be present; missing pages are errors, not
+implicitly zero-filled. Truncated headers, overlapping section ranges, arithmetic
+overflow, and invalid alignments return `FileParseError`. This initial API supports
+power-of-two `SectionAlignment >= 4096` and power-of-two `FileAlignment` from
+512 through 65536, with `FileAlignment <= SectionAlignment`.
+
+This converts the layout described by the [PE format specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format).
+It does not reverse loader relocations, restore overwritten import thunks, infer
+the actual load base, or repair missing headers. A captured live process image may
+need additional work before it can execute again.
+
 ## ELF (Linux)
 
 ELF endianness is stored in `header.ei_data`. Use [`ELF::byte_order`] as a convenience alias.
@@ -431,6 +481,7 @@ and Windows runtime checks, including negative controls and forced relocation.
 | `macho` | Yes | Mach-O parsing and editing |
 | `common` | Yes | Public `reloc`, `strings`, `validation`, and `write` helpers; format-specific helpers follow enabled formats |
 | `write` | No | Construction and transactional editing for enabled formats; does not enable `pe`, `elf`, or `macho` itself |
+| `pe-reconstruct` | No | `PE::from_memory_image` with `pe`; memory-to-file layout conversion, independent of `write` and `std`; does not enable `pe` itself |
 
 Core `field`, `errors`, and `utils` remain available in every configuration. Parsers
 retain the private string-reading machinery they need when `common` is disabled.

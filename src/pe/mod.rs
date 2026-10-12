@@ -39,6 +39,8 @@ pub mod layout;
 pub mod linenum;
 pub mod load_config;
 pub mod read;
+#[cfg(feature = "pe-reconstruct")]
+pub mod reconstruct;
 pub mod relocation;
 pub mod resource;
 pub mod rich;

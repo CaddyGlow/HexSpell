@@ -25,6 +25,7 @@ elf = []
 macho = []
 common = []
 write = []
+pe-reconstruct = []
 
 [dev-dependencies]
 toml = "1.0" # For testing purpose

@@ -29,6 +29,7 @@
     - *Chore*: Add a signature-container fuzz target and 133 deterministic PE, ELF and Mach-O seeds covering malformed containers, aliases, stacked trailers and transactional editing regressions.
 
 - **PE**
+    - *Added*: Opt-in `pe-reconstruct` feature with `pe` for `PE::from_memory_image`: reconstruct PE32/PE32+ file alignment from contiguous mapped bytes, capture virtual section contents, remap mapped debug pointers, and clear unavailable file-only metadata. Supports `no_std + alloc`; does not undo loader changes or repair imports.
     - *Added*: Owned opaque certificate tables and transactional append/replace/remove APIs with aligned serialization, directory/checksum updates and EOF/alias checks under `pe,write`.
     - *Added*: Opt-in `pe,write` feature (disabled by default) for dependency-free PE32/PE32+ construction with owned sections, builder-specific handles, resolved layouts, imports, local exports, checked fixups, base relocations, TLS, and x64 runtime-function registration.
     - *Added*: Lossless owned resource trees, canonical serialization, transactional append editing, explicit certificate preservation/stripping outcomes, and manifest/string/version/icon helpers.

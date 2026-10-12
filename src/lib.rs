@@ -20,6 +20,8 @@
 //! Disable defaults and select individual formats for `no_std` plus `alloc`.
 //! The `write` feature enables generation/editing without enabling any formats.
 //! Combine it with `pe`, `elf`, or `macho`; it also works without `std`.
+//! The independent opt-in `pe-reconstruct` feature with `pe` enables
+//! `PE::from_memory_image` for converting RVA-addressed snapshots to file layout.
 //! Core fields, errors, and byte utilities are always available. Owned buffers
 //! and parsed tables require an allocator; `pe::view::PeHeaders` does not allocate.
 //!
