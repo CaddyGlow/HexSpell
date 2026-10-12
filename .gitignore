@@ -1,5 +1,6 @@
 Cargo.lock 
 target/
+/coverage/
 tests/out/*
 /fuzz/corpus/
 /fuzz/hfuzz_workspace/

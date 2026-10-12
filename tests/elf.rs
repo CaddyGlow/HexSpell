@@ -1635,3 +1635,217 @@ fn extended_escape_counts_are_canonical_in_eager_and_borrowed_readers() {
         .section_name_table_index()
         .is_err());
 }
+
+#[test]
+fn section_accessors_patch_both_classes_and_byte_orders() {
+    use hexspell::elf::header::ElfClass;
+    use hexspell::elf::section::{SectionHeaderEntry, SectionType};
+    use hexspell::field::ByteOrder;
+    for (class, width) in [(ElfClass::Elf32, 4), (ElfClass::Elf64, 8)] {
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            let mut buffer = vec![0xa5; 96];
+            let mut section = SectionHeaderEntry::parse_one(&buffer, 8, class, order).unwrap();
+            section
+                .sh_name_mut()
+                .update_with(&mut buffer, 3, order)
+                .unwrap();
+            section
+                .sh_type_mut()
+                .update_with(&mut buffer, 1, order)
+                .unwrap();
+            section
+                .sh_flags_mut()
+                .update_with(&mut buffer, 6, order)
+                .unwrap();
+            section
+                .sh_addr_mut()
+                .update_with(&mut buffer, 0x1234, order)
+                .unwrap();
+            section
+                .sh_offset_mut()
+                .update_with(&mut buffer, 0x200, order)
+                .unwrap();
+            section
+                .sh_size_mut()
+                .update_with(&mut buffer, 0x80, order)
+                .unwrap();
+            section
+                .sh_link_mut()
+                .update_with(&mut buffer, 4, order)
+                .unwrap();
+            section
+                .sh_info_mut()
+                .update_with(&mut buffer, 5, order)
+                .unwrap();
+            section
+                .sh_addralign_mut()
+                .update_with(&mut buffer, 16, order)
+                .unwrap();
+            section
+                .sh_entsize_mut()
+                .update_with(&mut buffer, 24, order)
+                .unwrap();
+            assert_eq!(&buffer[..8], &[0xa5; 8]);
+            // Independently inspect the on-disk address slot, after name/type/flags.
+            let address_offset = 16 + width;
+            if width == 4 {
+                assert_eq!(order.read_u32(&buffer, address_offset).unwrap(), 0x1234);
+            } else {
+                assert_eq!(order.read_u64(&buffer, address_offset).unwrap(), 0x1234);
+            }
+            let parsed = SectionHeaderEntry::parse_one(&buffer, 8, class, order).unwrap();
+            assert_eq!(
+                (parsed.sh_name(), parsed.sh_type(), parsed.section_type()),
+                (3, 1, SectionType::Progbits)
+            );
+            assert_eq!(
+                (
+                    parsed.sh_flags(),
+                    parsed.sh_addr(),
+                    parsed.sh_offset(),
+                    parsed.sh_size()
+                ),
+                (6, 0x1234, 0x200, 0x80)
+            );
+            assert_eq!(
+                (
+                    parsed.sh_link(),
+                    parsed.sh_info(),
+                    parsed.sh_addralign(),
+                    parsed.sh_entsize()
+                ),
+                (4, 5, 16, 24)
+            );
+        }
+    }
+}
+
+#[test]
+fn program_accessors_patch_both_classes_and_byte_orders() {
+    use hexspell::elf::header::ElfClass;
+    use hexspell::elf::program::{ProgramHeaderEntry, SegmentType};
+    use hexspell::field::ByteOrder;
+    for class in [ElfClass::Elf32, ElfClass::Elf64] {
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            let mut buffer = vec![0xa5; 80];
+            let mut ph = ProgramHeaderEntry::parse_one(&buffer, 8, class, order).unwrap();
+            ph.p_type_mut().update_with(&mut buffer, 1, order).unwrap();
+            ph.p_flags_mut().update_with(&mut buffer, 5, order).unwrap();
+            ph.p_offset_mut()
+                .update_with(&mut buffer, 0x200, order)
+                .unwrap();
+            ph.p_vaddr_mut()
+                .update_with(&mut buffer, 0x400200, order)
+                .unwrap();
+            ph.p_paddr_mut()
+                .update_with(&mut buffer, 0x500200, order)
+                .unwrap();
+            ph.p_filesz_mut()
+                .update_with(&mut buffer, 0x30, order)
+                .unwrap();
+            ph.p_memsz_mut()
+                .update_with(&mut buffer, 0x80, order)
+                .unwrap();
+            ph.p_align_mut()
+                .update_with(&mut buffer, 0x1000, order)
+                .unwrap();
+            assert_eq!(&buffer[..8], &[0xa5; 8]);
+            assert_eq!(order.read_u32(&buffer, 8).unwrap(), 1);
+            let parsed = ProgramHeaderEntry::parse_one(&buffer, 8, class, order).unwrap();
+            assert_eq!(
+                (parsed.p_type(), parsed.segment_type(), parsed.p_flags()),
+                (1, SegmentType::Load, 5)
+            );
+            assert_eq!(
+                (parsed.p_offset(), parsed.p_vaddr(), parsed.p_paddr()),
+                (0x200, 0x400200, 0x500200)
+            );
+            assert_eq!(
+                (parsed.p_filesz(), parsed.p_memsz(), parsed.p_align()),
+                (0x30, 0x80, 0x1000)
+            );
+        }
+    }
+}
+
+#[test]
+fn dynamic_tags_preserve_known_kinds_and_unknown_values() {
+    use hexspell::elf::dynamic::{DynamicTable, DynamicTag::*};
+    use hexspell::elf::header::ElfClass;
+    use hexspell::field::ByteOrder;
+    let tags = [
+        (1, Needed),
+        (2, PltRelSz),
+        (3, PltGot),
+        (4, Hash),
+        (5, StrTab),
+        (6, SymTab),
+        (7, Rela),
+        (8, RelaSz),
+        (9, RelaEnt),
+        (10, StrSz),
+        (11, SymEnt),
+        (12, Init),
+        (13, Fini),
+        (14, SoName),
+        (15, RPath),
+        (16, Symbolic),
+        (17, Rel),
+        (18, RelSz),
+        (19, RelEnt),
+        (20, PltRel),
+        (21, Debug),
+        (22, TextRel),
+        (23, JmpRel),
+        (29, RunPath),
+        (30, Flags),
+        (0x6fff_fef5, GnuHash),
+        (0x6fff_fff0, VerSym),
+        (0x6fff_fffc, VerDef),
+        (0x6fff_fffd, VerDefNum),
+        (0x6fff_fffe, VerNeed),
+        (0x6fff_ffff, VerNeedNum),
+        (0x1234, Other(0x1234)),
+    ];
+    for (class, width) in [(ElfClass::Elf32, 4), (ElfClass::Elf64, 8)] {
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            let mut buffer = vec![0; 8 + (tags.len() + 1) * width * 2];
+            for (i, (tag, _)) in tags.iter().enumerate() {
+                let offset = 8 + i * width * 2;
+                if width == 4 {
+                    order.write_u32(&mut buffer, offset, *tag as u32);
+                    order.write_u32(&mut buffer, offset + width, i as u32);
+                } else {
+                    order.write_u64(&mut buffer, offset, *tag);
+                    order.write_u64(&mut buffer, offset + width, i as u64);
+                }
+            }
+            let mut table =
+                DynamicTable::parse(&buffer, 8, buffer.len() - 8, class, order).unwrap();
+            assert_eq!(table.entries.len(), tags.len());
+            for (i, (entry, (tag, kind))) in table.entries.iter().zip(&tags).enumerate() {
+                assert_eq!(
+                    (entry.tag(), entry.tag_kind(), entry.value()),
+                    (*tag, *kind, i as u64)
+                );
+                assert_eq!(
+                    (
+                        entry.d_tag.offset,
+                        entry.d_tag.size,
+                        entry.d_val.offset,
+                        entry.d_val.size
+                    ),
+                    (8 + i * width * 2, width, 8 + i * width * 2 + width, width)
+                );
+            }
+            table.entries[0]
+                .value_mut()
+                .update_with(&mut buffer, 42, order)
+                .unwrap();
+            let reparsed = DynamicTable::parse(&buffer, 8, buffer.len() - 8, class, order).unwrap();
+            assert_eq!(reparsed.find(1).unwrap().value(), 42);
+            assert!(reparsed.find(0).is_none());
+        }
+    }
+    assert_eq!(hexspell::elf::dynamic::DynamicTag::from(0), Null);
+}

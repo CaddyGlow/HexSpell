@@ -153,6 +153,37 @@ report a bug or discuss a change. Contributors and agents should follow the conv
 [`AGENTS.md`](AGENTS.md) (tests required, `cargo fmt` + `cargo test` before finishing, no runtime
 dependencies).
 
+### Test coverage
+
+Install [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and the LLVM
+tools for your Rust toolchain:
+
+```sh
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+```
+
+For a Nix-managed toolchain, provide matching LLVM tools through `LLVM_COV`
+and `LLVM_PROFDATA` if the shell does not include `llvm-tools-preview`.
+
+Collect coverage and generate local reports:
+
+```sh
+cargo llvm-cov --all-features --lib --tests --no-report
+mkdir -p coverage
+cargo llvm-cov report --ignore-filename-regex '(^|/)(tests|examples|benches)/' --lcov --output-path coverage/lcov.info
+cargo llvm-cov report --ignore-filename-regex '(^|/)(tests|examples|benches)/' --html --output-dir coverage
+cargo llvm-cov report --ignore-filename-regex '(^|/)(tests|examples|benches)/'
+```
+
+Open `coverage/html/index.html` to inspect covered and uncovered library lines.
+Reports stay in the ignored `coverage/` directory; nothing is uploaded.
+No minimum percentage is enforced.
+Coverage includes unit and integration tests with all features, including `write`.
+It excludes test/example/benchmark source files from the reported totals; doctests,
+ignored tests, fuzz harnesses, and platform-specific runtime acceptance scripts are
+not measured. This is separate from the [format coverage matrix](docs/coverage.md).
+
 ## License
 
 Distributed under the terms of the MIT License. See [LICENSE](LICENSE) for details.

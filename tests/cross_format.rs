@@ -633,3 +633,217 @@ fn elf_header_view_checks_extended_counts_and_entry_extents() {
     assert!(ElfHeaders::parse(&bytes).is_err());
     assert!(macho::view::MachHeaders::parse(&[0; 32]).is_err());
 }
+
+#[test]
+fn validation_pe_reports_header_and_section_conflicts() {
+    let mut pe = pe::PE::from_file("tests/samples/sample1.exe").unwrap();
+    pe.coff_header.size_of_optional_header.value = 0;
+    pe.optional_header.size_of_headers.value = 0;
+    pe.sections[1].pointer_to_raw_data.value = pe.sections[0].pointer_to_raw_data.value;
+    pe.sections[1].size_of_raw_data.value = pe.sections[0].size_of_raw_data.value;
+    let issues = validation::pe_consistency(&pe);
+    for expected in [
+        "size_of_optional_header is zero",
+        "section table extends",
+        "overlapping section",
+    ] {
+        assert!(
+            issues.iter().any(|issue| issue.message.contains(expected)),
+            "{issues:?}"
+        );
+    }
+    pe.sections.clear();
+    pe.optional_header.size_of_headers.value = 512;
+    assert_eq!(validation::pe_consistency(&pe).len(), 1);
+}
+
+#[test]
+fn validation_pe_va_rejects_underflow_and_oversized_rva() {
+    use hexspell::errors::FileParseError;
+    for file in ["tests/samples/sample1.exe", "tests/samples/sample64.exe"] {
+        let pe = pe::PE::from_file(file).unwrap();
+        let base = match pe.optional_header.image_base.value {
+            pe::header::ImageBase::Base32(base) => u64::from(base),
+            pe::header::ImageBase::Base64(base) => base,
+        };
+        assert!(matches!(
+            validation::pe_va_to_file_offset(&pe, base - 1),
+            Err(FileParseError::InvalidFileFormat)
+        ));
+        assert!(matches!(
+            validation::pe_va_to_file_offset(&pe, base + u64::from(u32::MAX) + 1),
+            Err(FileParseError::ValueTooLarge)
+        ));
+        let section = &pe.sections[0];
+        assert_eq!(
+            validation::pe_va_to_file_offset(&pe, base + u64::from(section.virtual_address.value))
+                .unwrap(),
+            section.pointer_to_raw_data.value as usize
+        );
+    }
+}
+
+#[test]
+fn validation_elf_reports_table_extents_and_overlapping_sections() {
+    let mut elf = elf::ELF::from_file("tests/samples/linux").unwrap();
+    assert!(validation::elf_consistency(&elf).is_empty());
+    let order = elf.byte_order().unwrap();
+    let text = elf.section_index_by_name(".text").unwrap();
+    let data = elf.section_index_by_name(".data").unwrap();
+    let offset = elf.section_headers[text].sh_offset();
+    elf.section_headers[data]
+        .sh_offset_mut()
+        .update_with(&mut elf.buffer, offset, order)
+        .unwrap();
+    elf.header.ph_off.value = elf.buffer.len() as u64;
+    elf.header.sh_off.value = elf.buffer.len() as u64;
+    let issues = validation::elf_consistency(&elf);
+    for expected in [
+        "program header table extends",
+        "section header table extends",
+        "overlapping section",
+    ] {
+        assert!(
+            issues.iter().any(|issue| issue.message.contains(expected)),
+            "{issues:?}"
+        );
+    }
+}
+
+#[test]
+fn validation_elf_translation_rejects_unmapped_and_memory_only_addresses() {
+    use hexspell::errors::FileParseError;
+    let mut elf = elf::ELF::from_file("tests/samples/linux").unwrap();
+    let order = elf.byte_order().unwrap();
+    let index = elf
+        .program_headers
+        .iter()
+        .position(|ph| ph.p_type() == elf::program::PT_LOAD)
+        .unwrap();
+    elf.program_headers.swap(0, index);
+    let ph = &mut elf.program_headers[0];
+    ph.p_vaddr_mut()
+        .update_with(&mut elf.buffer, 0x1000, order)
+        .unwrap();
+    ph.p_memsz_mut()
+        .update_with(&mut elf.buffer, 0x100, order)
+        .unwrap();
+    ph.p_filesz_mut()
+        .update_with(&mut elf.buffer, 0x20, order)
+        .unwrap();
+    ph.p_offset_mut()
+        .update_with(&mut elf.buffer, 0x200, order)
+        .unwrap();
+    assert_eq!(
+        validation::elf_va_to_file_offset(&elf, 0x101f).unwrap(),
+        0x21f
+    );
+    assert!(matches!(
+        validation::elf_va_to_file_offset(&elf, 0x1021),
+        Err(FileParseError::BufferOverflow)
+    ));
+    assert!(matches!(
+        validation::elf_va_to_file_offset(&elf, u64::MAX),
+        Err(FileParseError::InvalidFileFormat)
+    ));
+}
+
+#[test]
+fn validation_macho_reports_accounting_and_segment_conflicts() {
+    let mut macho = macho::MachO::from_file("tests/samples/machO-OSX-x86-ls").unwrap();
+    assert!(validation::macho_consistency(&macho).is_empty());
+    let order = macho.byte_order();
+    macho.segments[0]
+        .fileoff_mut()
+        .update_with(&mut macho.buffer, 0, order)
+        .unwrap();
+    macho.segments[0]
+        .filesize_mut()
+        .update_with(&mut macho.buffer, 0x100, order)
+        .unwrap();
+    macho.segments[1]
+        .fileoff_mut()
+        .update_with(&mut macho.buffer, 0, order)
+        .unwrap();
+    macho.header.sizeofcmds.value = macho.buffer.len() as u32;
+    let issues = validation::macho_consistency(&macho);
+    for expected in [
+        "load commands extend",
+        "does not equal sum",
+        "overlapping segment",
+    ] {
+        assert!(
+            issues.iter().any(|issue| issue.message.contains(expected)),
+            "{issues:?}"
+        );
+    }
+}
+
+#[test]
+fn validation_macho_translation_handles_file_and_memory_ranges() {
+    use hexspell::errors::FileParseError;
+    let mut macho = macho::MachO::from_file("tests/samples/machO-OSX-x86-ls").unwrap();
+    let order = macho.byte_order();
+    let seg = &mut macho.segments[0];
+    seg.vmaddr_mut()
+        .update_with(&mut macho.buffer, 0x1000, order)
+        .unwrap();
+    seg.vmsize_mut()
+        .update_with(&mut macho.buffer, 0x100, order)
+        .unwrap();
+    seg.fileoff_mut()
+        .update_with(&mut macho.buffer, 0x200, order)
+        .unwrap();
+    seg.filesize_mut()
+        .update_with(&mut macho.buffer, 0x20, order)
+        .unwrap();
+    assert_eq!(
+        validation::macho_va_to_file_offset(&macho, 0x101f).unwrap(),
+        0x21f
+    );
+    assert!(matches!(
+        validation::macho_va_to_file_offset(&macho, 0x1021),
+        Err(FileParseError::BufferOverflow)
+    ));
+    assert!(matches!(
+        validation::macho_va_to_file_offset(&macho, u64::MAX),
+        Err(FileParseError::InvalidFileFormat)
+    ));
+}
+
+#[test]
+fn relocation_file_offset_filters_match_address_filters() {
+    let pe = pe::PE::from_file("tests/samples/sample2.dll").unwrap();
+    let hits = reloc::pe_base_relocs(&pe).unwrap();
+    let first = &hits[0];
+    let filtered = reloc::pe_relocs_at_file_offset(&pe, first.file_offset).unwrap();
+    assert_eq!(
+        filtered.len(),
+        hits.iter()
+            .filter(|hit| hit.file_offset == first.file_offset)
+            .count()
+    );
+    assert!(filtered.iter().all(|hit| hit.rva == first.rva));
+    assert!(reloc::pe_relocs_at_file_offset(&pe, usize::MAX)
+        .unwrap()
+        .is_empty());
+
+    let elf = elf::ELF::from_file("tests/samples/linux").unwrap();
+    let tables = elf.relocations().unwrap();
+    let entry = &tables
+        .iter()
+        .find(|(_, entries)| !entries.is_empty())
+        .unwrap()
+        .1[0];
+    let offset = validation::elf_va_to_file_offset(&elf, entry.r_offset()).unwrap();
+    let by_offset = reloc::elf_relocs_at_file_offset(&elf, offset).unwrap();
+    let by_va = reloc::elf_relocs_at_va(&elf, entry.r_offset()).unwrap();
+    assert_eq!(by_offset.len(), by_va.len());
+    assert!(!by_offset.is_empty());
+    assert!(by_offset
+        .iter()
+        .all(|hit| hit.entry.r_offset() == entry.r_offset()));
+    assert!(reloc::elf_relocs_at_file_offset(&elf, usize::MAX)
+        .unwrap()
+        .is_empty());
+}
