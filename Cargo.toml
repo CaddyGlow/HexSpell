@@ -1,6 +1,6 @@
 [package]
 name = "caddy-hexspell"
-version = "1.2.2"
+version = "1.2.3"
 authors=["Mestre <namestre3@protonmail.com>"]
 edition = "2021"
 rust-version = "1.88"
