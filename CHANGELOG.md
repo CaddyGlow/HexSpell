@@ -22,10 +22,12 @@
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-18
+
 - **General**
     - *Added*: Independent `pe`, `elf`, `macho`, and `common` feature flags, enabled by default; core fields/errors/byte utilities remain always available.
     - *Changed*: **Breaking** — replace `pe-write`, `elf-write`, and `macho-write` with one independent `write` feature. Combine it with the desired format flags (for example, `elf,write`); `write` does not enable formats.
-    - *Changed*: **Breaking** — package version becomes 2.0.0. `default-features = false` now disables formats and the public common helper interface. Enable `pe,elf,macho,common` explicitly to retain the previous no-std surface.
+    - *Changed*: **Breaking** — package version becomes 1.2.2. `default-features = false` now disables formats and the public common helper interface. Enable `pe,elf,macho,common` explicitly to retain the previous no-std surface.
     - *Chore*: Add a signature-container fuzz target and 133 deterministic PE, ELF and Mach-O seeds covering malformed containers, aliases, stacked trailers and transactional editing regressions.
 
 - **PE**

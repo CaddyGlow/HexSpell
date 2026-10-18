@@ -1,7 +1,7 @@
 # PE generation validation
 
 Validated on 2026-10-11. Implementation plan: [pe-generation-plan.md](pe-generation-plan.md).
-Usage and feature migration: [guide.md](guide.md#features-and-migrating-to-20).
+Usage and feature migration: [guide.md](guide.md#features-and-migrating-to-122).
 
 ## Feature contract
 
@@ -12,8 +12,9 @@ fields, errors, and byte utilities remain available independently. The opt-in
 with `pe` for PE construction and resource editing; it does not imply a format.
 It works without `std` using `alloc`.
 
-The package version is 2.0.0 because consumers using `default-features = false`
-must now explicitly enable the formats and helper interface they use.
+The fork releases these changes as 1.2.2. Consumers using
+`default-features = false` must now explicitly enable the formats and helper
+interface they use.
 
 ## Automated checks
 

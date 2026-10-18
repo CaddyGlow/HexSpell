@@ -40,7 +40,7 @@ independent default-enabled features. The opt-in `write` feature enables constru
 and editing for the selected formats without enabling any formats itself. Use
 `features = ["write"]` with defaults, or `default-features = false,
 features = ["elf", "write"]` for just the ELF writer with `no_std + alloc`.
-See [feature selection and 2.0 migration](docs/guide.md#features-and-migrating-to-20).
+See [feature selection and 1.2.2 migration](docs/guide.md#features-and-migrating-to-122).
 
 ## Installation
 

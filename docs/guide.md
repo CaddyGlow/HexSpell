@@ -87,7 +87,7 @@ Enable `pe-reconstruct` alongside `pe`. This independent opt-in feature adds no
 dependencies, does not require `write`, and works with `no_std + alloc`:
 
 ```toml
-caddy-hexspell = { version = "2.0", default-features = false, features = ["pe", "pe-reconstruct"] }
+caddy-hexspell = { version = "1.2.2", default-features = false, features = ["pe", "pe-reconstruct"] }
 ```
 
 Supply a contiguous snapshot starting at the image base: input offset `rva`
@@ -368,7 +368,7 @@ and works with `no_std` plus `alloc`; `std` is needed only for file APIs/example
 
 ```toml
 [dependencies]
-caddy-hexspell = { version = "2.0", features = ["pe", "write"] }
+caddy-hexspell = { version = "1.2.2", features = ["pe", "write"] }
 ```
 
 `pe::build` constructs x86 PE32 and x64 PE32+ images from owned section bytes,
@@ -471,7 +471,7 @@ imports, manifests, RCDATA, strings, versions, icons, and x64 unwind metadata.
 See [validation scripts](../tests/scripts/README.md) for independent inspection
 and Windows runtime checks, including negative controls and forced relocation.
 
-## Features and migrating to 2.0
+## Features and migrating to 1.2.2
 
 | Feature | Default | Surface |
 | --- | --- | --- |
@@ -494,11 +494,11 @@ existing formats and helpers. Examples of narrower configurations:
 
 ```toml
 # PE parser only, no standard library or public common helper interface.
-caddy-hexspell = { version = "2.0", default-features = false, features = ["pe"] }
+caddy-hexspell = { version = "1.2.2", default-features = false, features = ["pe"] }
 # In-memory PE generation and resource editing only.
-caddy-hexspell = { version = "2.0", default-features = false, features = ["pe", "write"] }
+caddy-hexspell = { version = "1.2.2", default-features = false, features = ["pe", "write"] }
 # Shared fields plus generic helpers, with no format parser.
-caddy-hexspell = { version = "2.0", default-features = false, features = ["common"] }
+caddy-hexspell = { version = "1.2.2", default-features = false, features = ["common"] }
 ```
 
 Choose one dependency declaration. Feature unification is additive: another
