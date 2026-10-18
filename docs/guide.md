@@ -177,6 +177,39 @@ println!("first segment: {}", macho.segments[0].name());
 
 FAT binaries are unpacked automatically; the parsed object refers to the embedded thin Mach-O.
 
+### Chained fixups and legacy entry points
+
+`MachO::chained_fixups` decodes `LC_DYLD_CHAINED_FIXUPS` metadata: all three
+import encodings and every `DYLD_CHAINED_PTR_*` format in Apple's
+`fixup-chains.h`, including arm64e authenticated pointers and multi-start pages.
+`MachO::chained_fixup_slots` walks the chains in the file buffer and returns one
+`ChainedFixupSlot` per pointer, with the raw word as a `Field` (real offset and
+4- or 8-byte width) and the decoded `ChainedPointer`. Authenticated slots carry
+their signing schema (key, diversity, address diversity); the PAC value itself
+is computed by dyld at load time and is not stored in the file.
+
+```rust
+use hexspell::macho::{dyld::ChainedPointer, MachO};
+
+let macho = MachO::from_fat_index("binary", 1)?;
+let base = macho.segments.iter().find(|s| s.fileoff() == 0 && s.filesize() > 0).unwrap().vmaddr();
+for slot in macho.chained_fixup_slots()?.unwrap_or_default() {
+    if let ChainedPointer::AuthRebase { auth, .. } = &slot.pointer {
+        println!(
+            "{:#x} -> {:#x?} key {:?} discriminator {:#x}",
+            base + slot.vm_offset,
+            slot.rebase_vmaddr(base),
+            auth.key,
+            auth.discriminator(base + slot.vm_offset),
+        );
+    }
+}
+```
+
+`UnixThreadCommand::program_counter` locates the entry PC (`eip`/`rip`, `pc`,
+`srr0`) in an `LC_UNIXTHREAD` register state for x86, x86-64, ARM, arm64 and
+PowerPC, returning a patchable `Field`.
+
 ## Cross-format helpers
 
 | Module | Role |

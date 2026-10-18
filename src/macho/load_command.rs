@@ -227,6 +227,56 @@ pub struct UnixThreadCommand {
     pub state: Vec<u8>,
 }
 
+impl UnixThreadCommand {
+    /// Program-counter slot of the first thread state (`eip`/`rip`, `pc`, or
+    /// `srr0`) for `cpu_type` (from `mach_header.cputype`). The returned
+    /// [`Field`] holds the absolute file offset and 4- or 8-byte width.
+    /// Unified `x86_THREAD_STATE` / `ARM_THREAD_STATE` (arm64) headers are
+    /// followed. Returns `None` for unknown CPU/flavor pairs or short states.
+    pub fn program_counter(&self, cpu_type: u32, order: ByteOrder) -> Option<Field<u64>> {
+        const CPU_TYPE_X86: u32 = 7;
+        const CPU_TYPE_X86_64: u32 = 0x0100_0007;
+        const CPU_TYPE_ARM: u32 = 12;
+        const CPU_TYPE_ARM64: u32 = 0x0100_000c;
+        const CPU_TYPE_ARM64_32: u32 = 0x0200_000c;
+        const CPU_TYPE_POWERPC: u32 = 18;
+        const CPU_TYPE_POWERPC64: u32 = 0x0100_0012;
+        let read = |at: usize| order.read_u32(&self.state, at).ok();
+        // (offset of the PC within the state, width)
+        let slot = |flavor: u32| match (cpu_type, flavor) {
+            // x86_THREAD_STATE32: eip follows eight GPRs, ss and eflags.
+            (CPU_TYPE_X86, 1) => Some((40, 4)),
+            // x86_THREAD_STATE64: rip follows sixteen GPRs.
+            (CPU_TYPE_X86_64, 4) => Some((128, 8)),
+            // ARM_THREAD_STATE / ARM_THREAD_STATE32: r0-r12, sp, lr, pc.
+            (CPU_TYPE_ARM, 1) | (CPU_TYPE_ARM64 | CPU_TYPE_ARM64_32, 9) => Some((60, 4)),
+            // ARM_THREAD_STATE64: x0-x28, fp, lr, sp, pc.
+            (CPU_TYPE_ARM64 | CPU_TYPE_ARM64_32, 6) => Some((256, 8)),
+            // PPC_THREAD_STATE / PPC_THREAD_STATE64: srr0 comes first.
+            (CPU_TYPE_POWERPC, 1) => Some((0, 4)),
+            (CPU_TYPE_POWERPC64, 5) => Some((0, 8)),
+            _ => None,
+        };
+        let unified = matches!(
+            (cpu_type, self.flavor.value),
+            (CPU_TYPE_X86 | CPU_TYPE_X86_64, 7) | (CPU_TYPE_ARM64 | CPU_TYPE_ARM64_32, 1)
+        );
+        let (base, (at, size)) = if unified {
+            // x86_state_hdr / arm_state_hdr: inner flavor and count precede the state.
+            (8, slot(read(0)?)?)
+        } else {
+            (0, slot(self.flavor.value)?)
+        };
+        let at = base + at;
+        let value = if size == 4 {
+            u64::from(read(at)?)
+        } else {
+            order.read_u64(&self.state, at).ok()?
+        };
+        Some(Field::new(value, self.state_offset + at, size))
+    }
+}
+
 /// `linker_option_command` (`LC_LINKER_OPTION`).
 #[derive(Debug)]
 pub struct LinkerOptionCommand {

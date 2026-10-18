@@ -809,3 +809,1189 @@ fn chained_fixups_bound_aliased_page_tables() {
     bytes[record + 22..].fill(0xff);
     assert!(macho::dyld::decode_chained_fixups(&bytes).is_err());
 }
+
+#[test]
+fn unix_thread_program_counter_reads_real_i386_eip() {
+    use macho::load_command::TypedCommand;
+    let image = macho::MachO::from_file("tests/samples/machO-OSX-x86-ls").unwrap();
+    let thread = image
+        .typed_commands()
+        .unwrap()
+        .into_iter()
+        .find_map(|c| match c {
+            TypedCommand::UnixThread(t) => Some(t),
+            _ => None,
+        })
+        .expect("i386 ls has LC_UNIXTHREAD");
+    let pc = thread
+        .program_counter(image.header.cpu_type.value, image.byte_order())
+        .unwrap();
+    // llvm-otool -l: i386_THREAD_STATE eip 0x00001708.
+    assert_eq!(pc.value, 0x1708);
+    assert_eq!(pc.size, 4);
+    assert_eq!(pc.offset, thread.state_offset + 40);
+    assert_eq!(
+        image
+            .byte_order()
+            .read_u32(&image.buffer, pc.offset)
+            .unwrap(),
+        0x1708
+    );
+}
+
+#[test]
+fn unix_thread_program_counter_layouts() {
+    use hexspell::field::Field;
+    use macho::load_command::UnixThreadCommand;
+    fn thread(flavor: u32, state: Vec<u8>) -> UnixThreadCommand {
+        UnixThreadCommand {
+            flavor: Field::new(flavor, 8, 4),
+            count: Field::new((state.len() / 4) as u32, 12, 4),
+            state_offset: 16,
+            state,
+        }
+    }
+    let (x86_64, arm64, ppc) = (0x0100_0007, 0x0100_000c, 18);
+    let mut state = vec![0; 168];
+    state[128..136].copy_from_slice(&0x1_0000_3f00u64.to_le_bytes());
+    let pc = thread(4, state)
+        .program_counter(x86_64, ByteOrder::Little)
+        .unwrap();
+    assert_eq!((pc.value, pc.offset, pc.size), (0x1_0000_3f00, 16 + 128, 8));
+
+    let mut state = vec![0; 272];
+    state[256..264].copy_from_slice(&0x1_0000_0480u64.to_le_bytes());
+    let pc = thread(6, state.clone())
+        .program_counter(arm64, ByteOrder::Little)
+        .unwrap();
+    assert_eq!((pc.value, pc.offset), (0x1_0000_0480, 16 + 256));
+    // ARM_THREAD_STATE (unified) wraps ARM_THREAD_STATE64 in an arm_state_hdr.
+    let mut unified = [6u32.to_le_bytes(), 68u32.to_le_bytes()].concat();
+    unified.extend_from_slice(&state);
+    let pc = thread(1, unified)
+        .program_counter(arm64, ByteOrder::Little)
+        .unwrap();
+    assert_eq!((pc.value, pc.offset), (0x1_0000_0480, 16 + 8 + 256));
+
+    let mut state = vec![0; 160];
+    state[..4].copy_from_slice(&0x2f80u32.to_be_bytes());
+    let pc = thread(1, state)
+        .program_counter(ppc, ByteOrder::Big)
+        .unwrap();
+    assert_eq!((pc.value, pc.size), (0x2f80, 4));
+
+    // Mismatched CPU/flavor pairs and truncated states have no PC.
+    assert!(thread(4, vec![0; 168])
+        .program_counter(arm64, ByteOrder::Little)
+        .is_none());
+    assert!(thread(6, vec![0; 64])
+        .program_counter(arm64, ByteOrder::Little)
+        .is_none());
+}
+
+#[test]
+fn chained_pointer_formats_decode_apple_bit_layouts() {
+    use macho::dyld::*;
+    let decode = |format, word| decode_chained_pointer_as(format, 0, word).unwrap();
+    let auth = |key, diversity, address_diversity| PointerAuth {
+        key,
+        diversity,
+        address_diversity,
+    };
+    // arm64e authenticated rebase: target 32, diversity 16, addrDiv, key 2, next 11.
+    let word = (1 << 63) | (3 << 51) | (2 << 49) | (1 << 48) | (0xbeef << 32) | 0x4000;
+    for format in [DYLD_CHAINED_PTR_ARM64E, DYLD_CHAINED_PTR_ARM64E_USERLAND24] {
+        assert_eq!(
+            decode(format, word),
+            ChainedPointer::AuthRebase {
+                target: 0x4000,
+                auth: auth(PointerAuthKey::DA, 0xbeef, true),
+                next: 24
+            }
+        );
+    }
+    // Kernel arm64e uses a four-byte stride.
+    assert_eq!(
+        decode(DYLD_CHAINED_PTR_ARM64E_KERNEL, (1 << 51) | 8),
+        ChainedPointer::Rebase {
+            target: 8,
+            high8: 0,
+            next: 4
+        }
+    );
+    // Authenticated bind: 24-bit ordinals only in USERLAND24.
+    let word = (3 << 62) | (1 << 49) | (7 << 32) | 0x12_3456;
+    assert_eq!(
+        decode(DYLD_CHAINED_PTR_ARM64E_USERLAND24, word),
+        ChainedPointer::AuthBind {
+            ordinal: 0x12_3456,
+            auth: auth(PointerAuthKey::IB, 7, false),
+            next: 0
+        }
+    );
+    assert!(decode_chained_pointer_as(DYLD_CHAINED_PTR_ARM64E, 0, word).is_err());
+    // Plain arm64e bind sign-extends its 19-bit addend.
+    let word = (1 << 62) | (((-16i64 as u64) & 0x7ffff) << 32) | 5;
+    assert_eq!(
+        decode(DYLD_CHAINED_PTR_ARM64E_USERLAND, word),
+        ChainedPointer::Bind {
+            ordinal: 5,
+            addend: -16,
+            next: 0
+        }
+    );
+    assert_eq!(
+        decode(
+            DYLD_CHAINED_PTR_ARM64E,
+            (0x80 << 43) | (1 << 51) | 0x1_0000_1000
+        ),
+        ChainedPointer::Rebase {
+            target: 0x1_0000_1000,
+            high8: 0x80,
+            next: 8
+        }
+    );
+    // Kernel collections carry a cache level and optional signing.
+    assert_eq!(
+        decode(
+            DYLD_CHAINED_PTR_64_KERNEL_CACHE,
+            (1 << 63) | (2 << 51) | (1 << 30) | 0x100
+        ),
+        ChainedPointer::CacheRebase {
+            target: 0x100,
+            cache_level: 1,
+            auth: Some(auth(PointerAuthKey::IA, 0, false)),
+            next: 8
+        }
+    );
+    assert_eq!(
+        decode(DYLD_CHAINED_PTR_X86_64_KERNEL_CACHE, (3 << 51) | 0x100),
+        ChainedPointer::CacheRebase {
+            target: 0x100,
+            cache_level: 0,
+            auth: None,
+            next: 3
+        }
+    );
+    // Shared cache: 34-bit offsets, keyIsData selects DA, next at bit 52.
+    assert_eq!(
+        decode(
+            DYLD_CHAINED_PTR_ARM64E_SHARED_CACHE,
+            (1 << 63) | (1 << 52) | (1 << 51) | (9 << 34) | 0x2_0000_0000
+        ),
+        ChainedPointer::AuthRebase {
+            target: 0x2_0000_0000,
+            auth: auth(PointerAuthKey::DA, 9, false),
+            next: 8
+        }
+    );
+    assert!(decode_chained_pointer_as(DYLD_CHAINED_PTR_ARM64E_SHARED_CACHE, 0, 1 << 42).is_err());
+    assert_eq!(
+        decode(
+            DYLD_CHAINED_PTR_ARM64E_SEGMENTED,
+            (1 << 51) | (3 << 28) | 0x40
+        ),
+        ChainedPointer::SegmentedRebase {
+            target_segment: 3,
+            target_offset: 0x40,
+            auth: None,
+            next: 4
+        }
+    );
+    // 32-bit formats.
+    assert_eq!(
+        decode(DYLD_CHAINED_PTR_32, (1 << 31) | (2 << 26) | (63 << 20) | 9),
+        ChainedPointer::Bind {
+            ordinal: 9,
+            addend: 63,
+            next: 8
+        }
+    );
+    assert_eq!(
+        decode_chained_pointer_as(DYLD_CHAINED_PTR_32, 0x10_0000, 0x0300_0000).unwrap(),
+        ChainedPointer::NonPointer {
+            value: 0x0300_0000 - (0x0400_0000 + 0x10_0000) / 2,
+            next: 0
+        }
+    );
+    assert_eq!(
+        decode(DYLD_CHAINED_PTR_32_CACHE, (1 << 30) | 0x1000),
+        ChainedPointer::Rebase {
+            target: 0x1000,
+            high8: 0,
+            next: 4
+        }
+    );
+    assert_eq!(
+        decode(DYLD_CHAINED_PTR_32_FIRMWARE, (5 << 26) | 0x1000),
+        ChainedPointer::Rebase {
+            target: 0x1000,
+            high8: 0,
+            next: 20
+        }
+    );
+    assert!(matches!(
+        decode_chained_pointer_as(15, 0, 0),
+        Err(FileParseError::UnsupportedFeature(_))
+    ));
+    // Address diversity blends the slot address into the high 16 bits.
+    let schema = auth(PointerAuthKey::IA, 0x1234, true);
+    assert_eq!(
+        schema.discriminator(0xffff_8000_0001_0008),
+        0x1234_8000_0001_0008
+    );
+    assert_eq!(
+        auth(PointerAuthKey::IA, 0x1234, false).discriminator(8),
+        0x1234
+    );
+}
+
+fn chained_blob(imports_format: u32, imports: &[u8], names: &[u8], segment: &[u8]) -> Vec<u8> {
+    // Header (28), starts_in_image with one segment (8), segment record, imports, names.
+    let starts = 28;
+    let record = starts + 8;
+    let imports_offset = record + segment.len();
+    let symbols_offset = imports_offset + imports.len();
+    let mut bytes = Vec::new();
+    for value in [
+        0,
+        starts,
+        imports_offset,
+        symbols_offset,
+        0,
+        imports_format as usize,
+        0,
+        1,
+        8,
+    ] {
+        bytes.extend_from_slice(&(value as u32).to_le_bytes());
+    }
+    bytes.extend_from_slice(segment);
+    bytes.extend_from_slice(imports);
+    bytes.extend_from_slice(names);
+    bytes
+}
+
+fn chained_segment(format: u16, max_valid: u32, page_starts: &[u16]) -> Vec<u8> {
+    let page_count = page_starts.len().min(1) as u16;
+    let mut bytes = ((22 + page_starts.len() * 2) as u32).to_le_bytes().to_vec();
+    bytes.extend_from_slice(&0x1000u16.to_le_bytes());
+    bytes.extend_from_slice(&format.to_le_bytes());
+    bytes.extend_from_slice(&0x1000u64.to_le_bytes());
+    bytes.extend_from_slice(&max_valid.to_le_bytes());
+    bytes.extend_from_slice(&page_count.to_le_bytes());
+    for start in page_starts {
+        bytes.extend_from_slice(&start.to_le_bytes());
+    }
+    bytes
+}
+
+fn set_import_count(blob: &mut [u8], count: u32) {
+    blob[16..20].copy_from_slice(&count.to_le_bytes());
+}
+
+#[test]
+fn chained_imports_decode_addend_formats_and_unsigned_ordinals() {
+    use macho::dyld::*;
+    let segment = chained_segment(DYLD_CHAINED_PTR_64_OFFSET, 0, &[0]);
+    // 8-bit ordinals above 0xF0 are special; 200 is an ordinary dylib ordinal.
+    let imports = [
+        (200u32 | (1 << 9)).to_le_bytes(),
+        (0xffu32 | 256 | (1 << 9)).to_le_bytes(),
+    ]
+    .concat();
+    let mut blob = chained_blob(DYLD_CHAINED_IMPORT, &imports, b"\0_a\0", &segment);
+    set_import_count(&mut blob, 2);
+    let fixups = decode_chained_fixups(&blob).unwrap();
+    assert_eq!(fixups.imports_format, DYLD_CHAINED_IMPORT);
+    assert_eq!(fixups.imports[0].library_ordinal, 200);
+    assert_eq!(fixups.imports[1].library_ordinal, -1);
+    assert!(fixups.imports[1].weak);
+    assert_eq!(fixups.imports[0].name, "_a");
+
+    let imports = [(2u32 | (1 << 9)).to_le_bytes(), (-8i32).to_le_bytes()].concat();
+    let mut blob = chained_blob(DYLD_CHAINED_IMPORT_ADDEND, &imports, b"\0_b\0", &segment);
+    set_import_count(&mut blob, 1);
+    let import = &decode_chained_fixups(&blob).unwrap().imports[0];
+    assert_eq!((import.library_ordinal, import.addend), (2, -8));
+
+    // ADDEND64: 16-bit ordinal, weak bit 16, 32-bit name offset, 64-bit addend.
+    let imports = [
+        (300u64 | (1 << 16) | (1 << 32)).to_le_bytes(),
+        0x1_0000_0000u64.to_le_bytes(),
+        (0xfffeu64 | (1 << 32)).to_le_bytes(),
+        0u64.to_le_bytes(),
+    ]
+    .concat();
+    let mut blob = chained_blob(DYLD_CHAINED_IMPORT_ADDEND64, &imports, b"\0_c\0", &segment);
+    set_import_count(&mut blob, 2);
+    let fixups = decode_chained_fixups(&blob).unwrap();
+    assert_eq!(fixups.imports[0].library_ordinal, 300);
+    assert!(fixups.imports[0].weak);
+    assert_eq!(fixups.imports[0].addend, 0x1_0000_0000);
+    assert_eq!(fixups.imports[1].library_ordinal, -2);
+
+    let mut compressed = blob.clone();
+    compressed[24..28].copy_from_slice(&1u32.to_le_bytes());
+    assert!(matches!(
+        decode_chained_fixups(&compressed),
+        Err(FileParseError::UnsupportedFeature(_))
+    ));
+}
+
+#[test]
+fn chained_segments_resolve_multi_start_pages() {
+    use macho::dyld::*;
+    // page_start[0] indexes the list at entry 1: starts 0x10, 0x200 (last).
+    let segment = chained_segment(
+        DYLD_CHAINED_PTR_32,
+        0x20_0000,
+        &[
+            DYLD_CHAINED_PTR_START_MULTI | 1,
+            0x10,
+            0x200 | DYLD_CHAINED_PTR_START_LAST,
+        ],
+    );
+    let blob = chained_blob(DYLD_CHAINED_IMPORT, &[], &[], &segment);
+    let fixups = decode_chained_fixups(&blob).unwrap();
+    let segment = &fixups.segments[0];
+    assert_eq!(segment.pointer_format, DYLD_CHAINED_PTR_32);
+    assert_eq!(segment.max_valid_pointer, 0x20_0000);
+    assert_eq!(segment.page_count, 1);
+    assert_eq!(segment.chain_starts(0).collect::<Vec<_>>(), [0x10, 0x200]);
+    assert_eq!(segment.chain_starts(1).count(), 0);
+
+    for starts in [
+        // Unterminated list.
+        &[DYLD_CHAINED_PTR_START_MULTI | 1, 0x10][..],
+        // List index pointing back into the per-page entries.
+        &[
+            DYLD_CHAINED_PTR_START_MULTI,
+            0x10 | DYLD_CHAINED_PTR_START_LAST,
+        ],
+        // Misaligned start.
+        &[0x11],
+    ] {
+        let segment = chained_segment(DYLD_CHAINED_PTR_32, 0, starts);
+        let blob = chained_blob(DYLD_CHAINED_IMPORT, &[], &[], &segment);
+        assert!(decode_chained_fixups(&blob).is_err(), "{starts:x?}");
+    }
+}
+
+/// Minimal arm64e image: __TEXT at file 0, __DATA at 0x1000 holding `slots`, fixups at 0x2000.
+fn arm64e_chained_image(slots: &[u64]) -> Vec<u8> {
+    use macho::dyld::{DYLD_CHAINED_IMPORT, DYLD_CHAINED_PTR_ARM64E_USERLAND24};
+    fn segment(name: &[u8], vmaddr: u64, fileoff: u64, prot: u32) -> Vec<u8> {
+        let mut bytes = [0x19u32.to_le_bytes(), 72u32.to_le_bytes()].concat();
+        let mut segname = [0u8; 16];
+        segname[..name.len()].copy_from_slice(name);
+        bytes.extend_from_slice(&segname);
+        for value in [vmaddr, 0x1000, fileoff, 0x1000] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in [prot, prot, 0, 0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+    let imports = (1u32 | (1 << 9)).to_le_bytes();
+    let starts = chained_segment(DYLD_CHAINED_PTR_ARM64E_USERLAND24, 0, &[0]);
+    let mut blob = chained_blob(DYLD_CHAINED_IMPORT, &imports, b"\0_foo\0", &starts);
+    set_import_count(&mut blob, 1);
+    // starts_in_image covers __TEXT (no chains) and __DATA.
+    blob.splice(28..36, [2u32, 0, 12].iter().flat_map(|v| v.to_le_bytes()));
+    for at in [8, 12] {
+        let value = u32::from_le_bytes(blob[at..at + 4].try_into().unwrap()) + 4;
+        blob[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    let mut commands = segment(b"__TEXT", 0x1_0000_0000, 0, 5);
+    commands.extend(segment(b"__DATA", 0x1_0000_1000, 0x1000, 3));
+    for value in [0x8000_0034u32, 16, 0x2000, blob.len() as u32] {
+        commands.extend_from_slice(&value.to_le_bytes());
+    }
+    let mut bytes = Vec::new();
+    for value in [
+        0xfeed_facfu32,
+        0x0100_000c,
+        0x8000_0002,
+        2,
+        3,
+        commands.len() as u32,
+        0,
+        0,
+    ] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes.extend(commands);
+    bytes.resize(0x1000, 0);
+    for slot in slots {
+        bytes.extend_from_slice(&slot.to_le_bytes());
+    }
+    bytes.resize(0x2000, 0);
+    bytes.extend(blob);
+    bytes
+}
+
+#[test]
+fn chained_fixup_slots_walk_arm64e_chains() {
+    use macho::dyld::*;
+    let slots = [
+        // auth rebase -> __TEXT+0x500, IA, diversity 0x1234, address-diversified
+        (1 << 63) | (1 << 51) | (1 << 48) | (0x1234 << 32) | 0x500,
+        // auth bind ordinal 0, DA, diversity 0x55
+        (3 << 62) | (1 << 51) | (2 << 49) | (0x55 << 32),
+        // bind ordinal 0, addend -4
+        (1 << 62) | (1 << 51) | ((-4i64 as u64 & 0x7ffff) << 32),
+        // rebase -> image offset 0x1010, high8 0x80, end of chain
+        (0x80 << 43) | 0x1010,
+    ];
+    let image = macho::MachO::from_buffer(arm64e_chained_image(&slots)).unwrap();
+    let walked = image.chained_fixup_slots().unwrap().unwrap();
+    assert_eq!(walked.len(), 4);
+    for (i, slot) in walked.iter().enumerate() {
+        assert_eq!(slot.segment_index, 1);
+        assert_eq!(slot.pointer_format, DYLD_CHAINED_PTR_ARM64E_USERLAND24);
+        assert_eq!(slot.vm_offset, 0x1000 + 8 * i as u64);
+        assert_eq!((slot.raw.offset, slot.raw.size), (0x1000 + 8 * i, 8));
+        assert_eq!(slot.raw.value, slots[i]);
+    }
+    let base = 0x1_0000_0000;
+    let ChainedPointer::AuthRebase { auth, .. } = &walked[0].pointer else {
+        panic!("{:?}", walked[0].pointer);
+    };
+    assert_eq!(auth.key, PointerAuthKey::IA);
+    assert_eq!(
+        auth.discriminator(base + walked[0].vm_offset),
+        (0x1234 << 48) | 0x1_0000_1000
+    );
+    assert_eq!(walked[0].rebase_vmaddr(base), Some(0x1_0000_0500));
+    assert!(matches!(
+        walked[1].pointer,
+        ChainedPointer::AuthBind {
+            ordinal: 0,
+            auth: PointerAuth {
+                key: PointerAuthKey::DA,
+                diversity: 0x55,
+                address_diversity: false
+            },
+            ..
+        }
+    ));
+    assert!(matches!(
+        walked[2].pointer,
+        ChainedPointer::Bind {
+            ordinal: 0,
+            addend: -4,
+            ..
+        }
+    ));
+    assert_eq!(walked[2].rebase_vmaddr(base), None);
+    assert_eq!(walked[3].rebase_vmaddr(base), Some(0x8000_0001_0000_1010));
+    assert_eq!(
+        image.chained_fixups().unwrap().unwrap().imports[0].name,
+        "_foo"
+    );
+
+    // Out-of-range bind ordinals and chains leaving the page are rejected.
+    let bad = [(1 << 62) | 1];
+    let image = macho::MachO::from_buffer(arm64e_chained_image(&bad)).unwrap();
+    assert!(image.chained_fixup_slots().is_err());
+    let mut bytes = arm64e_chained_image(&[0x7ff << 51]);
+    bytes.truncate(0x1008);
+    bytes.resize(0x2000, 0);
+    bytes.extend_from_slice(&arm64e_chained_image(&[])[0x2000..]);
+    let image = macho::MachO::from_buffer(bytes).unwrap();
+    assert!(image.chained_fixup_slots().is_err());
+    // Images without LC_DYLD_CHAINED_FIXUPS report None.
+    let image = macho::MachO::from_file("tests/samples/machO-OSX-x86-ls").unwrap();
+    assert!(image.chained_fixup_slots().unwrap().is_none());
+}
+
+// ---- Chained fixups: coverage of the formats and rejections the tests above leave out -----------
+
+fn segment64(name: &[u8], vmaddr: u64, vmsize: u64, fileoff: u64, prot: u32) -> Vec<u8> {
+    let mut bytes = [0x19u32.to_le_bytes(), 72u32.to_le_bytes()].concat();
+    let mut segname = [0u8; 16];
+    segname[..name.len()].copy_from_slice(name);
+    bytes.extend_from_slice(&segname);
+    for value in [vmaddr, vmsize, fileoff, vmsize] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    for value in [prot, prot, 0, 0] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+/// A 64-bit Mach-O with `__TEXT` (file `0..0x1000`), a `__DATA` of `pages` 4 KiB pages from file
+/// `0x1000` and an `LC_DYLD_CHAINED_FIXUPS` behind them. `imports` are `(library ordinal, name)`
+/// of a `DYLD_CHAINED_IMPORT` table; `page_starts` is the segment's raw table (multi-start lists
+/// included); `words` are `(offset in __DATA, slot word, slot width in bytes)`.
+fn fixup_image(
+    format: u16,
+    max_valid: u32,
+    imports: &[(u8, &str)],
+    page_starts: &[u16],
+    pages: usize,
+    words: &[(usize, u64, usize)],
+) -> Vec<u8> {
+    let (mut names, mut records) = (vec![0u8], Vec::new());
+    for (ordinal, name) in imports {
+        let record = u32::from(*ordinal) | (names.len() as u32) << 9;
+        records.extend_from_slice(&record.to_le_bytes());
+        names.extend_from_slice(name.as_bytes());
+        names.push(0);
+    }
+    // starts_in_image: two segments, only __DATA (index 1) has chains.
+    let starts = 32usize;
+    let record_at = starts + 12;
+    let mut segment = ((22 + 2 * page_starts.len()) as u32).to_le_bytes().to_vec();
+    segment.extend_from_slice(&0x1000u16.to_le_bytes());
+    segment.extend_from_slice(&format.to_le_bytes());
+    segment.extend_from_slice(&0x1000u64.to_le_bytes());
+    segment.extend_from_slice(&max_valid.to_le_bytes());
+    segment.extend_from_slice(&(pages as u16).to_le_bytes());
+    for start in page_starts {
+        segment.extend_from_slice(&start.to_le_bytes());
+    }
+    let imports_offset = record_at + segment.len();
+    let symbols_offset = imports_offset + records.len();
+    let mut blob = Vec::new();
+    for value in [
+        0,
+        starts,
+        imports_offset,
+        symbols_offset,
+        imports.len(),
+        1, // DYLD_CHAINED_IMPORT
+        0,
+    ] {
+        blob.extend_from_slice(&(value as u32).to_le_bytes());
+    }
+    blob.resize(starts, 0);
+    for value in [2u32, 0, 12] {
+        blob.extend_from_slice(&value.to_le_bytes());
+    }
+    blob.extend(segment);
+    blob.extend(records);
+    blob.extend(names);
+
+    let data_size = pages * 0x1000;
+    let fixups_at = 0x1000 + data_size;
+    let mut commands = segment64(b"__TEXT", 0x1_0000_0000, 0x1000, 0, 5);
+    commands.extend(segment64(
+        b"__DATA",
+        0x1_0000_1000,
+        data_size as u64,
+        0x1000,
+        3,
+    ));
+    for value in [0x8000_0034u32, 16, fixups_at as u32, blob.len() as u32] {
+        commands.extend_from_slice(&value.to_le_bytes());
+    }
+    let mut bytes = Vec::new();
+    for value in [
+        0xfeed_facfu32,
+        0x0100_000c,
+        0,
+        2,
+        3,
+        commands.len() as u32,
+        0,
+        0,
+    ] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes.extend(commands);
+    bytes.resize(0x1000 + data_size, 0);
+    for (offset, word, width) in words {
+        let at = 0x1000 + offset;
+        match width {
+            4 => bytes[at..at + 4].copy_from_slice(&(*word as u32).to_le_bytes()),
+            _ => bytes[at..at + 8].copy_from_slice(&word.to_le_bytes()),
+        }
+    }
+    bytes.extend(blob);
+    bytes
+}
+
+/// Slot word of an authenticated arm64e bind: ordinal in the low bits, then diversity (16),
+/// address diversity, key (2), next (11), bind and auth bits.
+fn auth_bind_word(ordinal: u64, diversity: u64, address: u64, key: u64, next: u64) -> u64 {
+    (3 << 62) | (next << 51) | (key << 49) | (address << 48) | (diversity << 32) | ordinal
+}
+
+/// Slot word of an authenticated arm64e rebase: 32-bit image offset, then as above.
+fn auth_rebase_word(target: u64, diversity: u64, address: u64, key: u64, next: u64) -> u64 {
+    (1 << 63) | (next << 51) | (key << 49) | (address << 48) | (diversity << 32) | target
+}
+
+#[test]
+fn chained_rebase_targets_follow_the_pointer_format() {
+    use hexspell::field::Field;
+    use macho::dyld::*;
+    let base = 0x1_0000_0000u64;
+    let slot = |pointer_format, pointer| ChainedFixupSlot {
+        segment_index: 1,
+        pointer_format,
+        vm_offset: 0x1000,
+        raw: Field::new(0, 0x1000, 8),
+        pointer,
+    };
+    let plain = |target, high8| ChainedPointer::Rebase {
+        target,
+        high8,
+        next: 0,
+    };
+    // `fixup-chains.h`: "unauth target is vmaddr" for ARM64E, PTR_64, PTR_32 and ARM64E_FIRMWARE.
+    for format in [
+        DYLD_CHAINED_PTR_ARM64E,
+        DYLD_CHAINED_PTR_64,
+        DYLD_CHAINED_PTR_32,
+        DYLD_CHAINED_PTR_ARM64E_FIRMWARE,
+    ] {
+        assert_eq!(
+            slot(format, plain(0x1_0000_2000, 0)).rebase_vmaddr(base),
+            Some(0x1_0000_2000),
+            "format {format}"
+        );
+        // The tag byte goes on top of the unslid pointer.
+        assert_eq!(
+            slot(format, plain(0x1_0000_2000, 0x80)).rebase_vmaddr(base),
+            Some(0x8000_0001_0000_2000),
+            "format {format}"
+        );
+    }
+    // ... and "vm offset" for PTR_64_OFFSET, ARM64E_KERNEL, ARM64E_USERLAND and USERLAND24.
+    for format in [
+        DYLD_CHAINED_PTR_64_OFFSET,
+        DYLD_CHAINED_PTR_ARM64E_KERNEL,
+        DYLD_CHAINED_PTR_ARM64E_USERLAND,
+        DYLD_CHAINED_PTR_ARM64E_USERLAND24,
+    ] {
+        assert_eq!(
+            slot(format, plain(0x2000, 0)).rebase_vmaddr(base),
+            Some(0x1_0000_2000),
+            "format {format}"
+        );
+        assert_eq!(
+            slot(format, plain(0x2000, 0x80)).rebase_vmaddr(base),
+            Some(0x8000_0001_0000_2000),
+            "format {format}"
+        );
+    }
+    // An authenticated rebase is an image offset in every format, ARM64E included.
+    let schema = PointerAuth {
+        key: PointerAuthKey::IA,
+        diversity: 0,
+        address_diversity: false,
+    };
+    for format in [
+        DYLD_CHAINED_PTR_ARM64E,
+        DYLD_CHAINED_PTR_ARM64E_USERLAND,
+        DYLD_CHAINED_PTR_ARM64E_USERLAND24,
+    ] {
+        let auth = ChainedPointer::AuthRebase {
+            target: 0x2000,
+            auth: schema,
+            next: 0,
+        };
+        assert_eq!(
+            slot(format, auth).rebase_vmaddr(base),
+            Some(0x1_0000_2000),
+            "format {format}"
+        );
+    }
+    // Binds, non-pointers and rebases relative to something else have no address of their own.
+    for pointer in [
+        ChainedPointer::Bind {
+            ordinal: 0,
+            addend: 0,
+            next: 0,
+        },
+        ChainedPointer::NonPointer { value: 1, next: 0 },
+        ChainedPointer::CacheRebase {
+            target: 1,
+            cache_level: 0,
+            auth: None,
+            next: 0,
+        },
+        ChainedPointer::SegmentedRebase {
+            target_segment: 1,
+            target_offset: 0,
+            auth: None,
+            next: 0,
+        },
+    ] {
+        assert_eq!(
+            slot(DYLD_CHAINED_PTR_ARM64E_USERLAND24, pointer).rebase_vmaddr(base),
+            None
+        );
+    }
+    // An offset that does not fit above the base is not an address.
+    assert_eq!(
+        slot(DYLD_CHAINED_PTR_64_OFFSET, plain(u64::MAX, 0)).rebase_vmaddr(base),
+        None
+    );
+}
+
+#[test]
+fn chained_walk_skips_empty_pages_and_decodes_every_key() {
+    use macho::dyld::*;
+    // Four pages: none, two chains (listed behind the page entries), one chain, none.
+    let page_starts = [
+        DYLD_CHAINED_PTR_START_NONE,
+        DYLD_CHAINED_PTR_START_MULTI | 4,
+        0x20,
+        DYLD_CHAINED_PTR_START_NONE,
+        0x10,
+        0x30 | DYLD_CHAINED_PTR_START_LAST,
+    ];
+    let words = [
+        // page 1, first chain: IB bind (address diversified), then a DB bind
+        (0x1010, auth_bind_word(0, 0x11, 1, 1, 1), 8),
+        (0x1018, auth_bind_word(2, 0x22, 0, 3, 0), 8),
+        // page 1, second chain: DA rebase
+        (0x1030, auth_rebase_word(0x2000, 0x33, 0, 2, 0), 8),
+        // page 2: IA bind to the flat-lookup import
+        (0x2020, auth_bind_word(1, 0, 0, 0, 0), 8),
+    ];
+    // Library ordinals: 200 (unsigned), 0xFE (-2, flat lookup), 1.
+    let imports = [(200, "_far"), (0xfe, "_flat"), (1, "_near")];
+    let image = macho::MachO::from_buffer(fixup_image(
+        DYLD_CHAINED_PTR_ARM64E_USERLAND24,
+        0,
+        &imports,
+        &page_starts,
+        4,
+        &words,
+    ))
+    .unwrap();
+
+    let fixups = image.chained_fixups().unwrap().unwrap();
+    let ordinals: Vec<_> = fixups.imports.iter().map(|i| i.library_ordinal).collect();
+    assert_eq!(ordinals, [200, -2, 1]);
+    let segment = &fixups.segments[0];
+    assert_eq!((segment.segment_index, segment.page_count), (1, 4));
+    assert_eq!(segment.chain_starts(0).count(), 0);
+    assert_eq!(segment.chain_starts(1).collect::<Vec<_>>(), [0x10, 0x30]);
+    assert_eq!(segment.chain_starts(2).collect::<Vec<_>>(), [0x20]);
+    assert_eq!(segment.chain_starts(3).count(), 0);
+
+    let slots = image.chained_fixup_slots().unwrap().unwrap();
+    // Pages in order, each chain from its start; empty pages contribute nothing.
+    let offsets: Vec<_> = slots.iter().map(|s| s.vm_offset).collect();
+    assert_eq!(offsets, [0x2010, 0x2018, 0x2030, 0x3020]);
+    let schema = |key, diversity, address_diversity| PointerAuth {
+        key,
+        diversity,
+        address_diversity,
+    };
+    assert_eq!(
+        slots[0].pointer,
+        ChainedPointer::AuthBind {
+            ordinal: 0,
+            auth: schema(PointerAuthKey::IB, 0x11, true),
+            next: 8
+        }
+    );
+    assert_eq!(
+        slots[1].pointer,
+        ChainedPointer::AuthBind {
+            ordinal: 2,
+            auth: schema(PointerAuthKey::DB, 0x22, false),
+            next: 0
+        }
+    );
+    assert_eq!(
+        slots[2].pointer,
+        ChainedPointer::AuthRebase {
+            target: 0x2000,
+            auth: schema(PointerAuthKey::DA, 0x33, false),
+            next: 0
+        }
+    );
+    assert_eq!(
+        slots[3].pointer,
+        ChainedPointer::AuthBind {
+            ordinal: 1,
+            auth: schema(PointerAuthKey::IA, 0, false),
+            next: 0
+        }
+    );
+}
+
+#[test]
+fn chained_walk_reads_32_bit_slots_and_cache_and_segmented_chains() {
+    use macho::dyld::*;
+    // DYLD_CHAINED_PTR_32: 4-byte slots, stride 4, next in 5 bits at 26.
+    let max_valid = 0x10_0000;
+    let words = [
+        (0, 0x1000 | (1 << 26), 4),
+        (4, (1 << 31) | (1 << 26) | (5 << 20), 4),
+        // Above max_valid_pointer: not a pointer, the value is biased.
+        (8, 0x300_0000, 4),
+    ];
+    let image = macho::MachO::from_buffer(fixup_image(
+        DYLD_CHAINED_PTR_32,
+        max_valid,
+        &[(1, "_x")],
+        &[0],
+        1,
+        &words,
+    ))
+    .unwrap();
+    let slots = image.chained_fixup_slots().unwrap().unwrap();
+    assert_eq!(slots.len(), 3);
+    for (i, slot) in slots.iter().enumerate() {
+        assert_eq!((slot.raw.size, slot.raw.offset), (4, 0x1000 + 4 * i));
+        assert_eq!(slot.vm_offset, 0x1000 + 4 * i as u64);
+    }
+    assert_eq!(
+        slots[0].pointer,
+        ChainedPointer::Rebase {
+            target: 0x1000,
+            high8: 0,
+            next: 4
+        }
+    );
+    assert_eq!(
+        slots[1].pointer,
+        ChainedPointer::Bind {
+            ordinal: 0,
+            addend: 5,
+            next: 4
+        }
+    );
+    assert_eq!(
+        slots[2].pointer,
+        ChainedPointer::NonPointer {
+            value: 0x300_0000 - (0x0400_0000 + max_valid) / 2,
+            next: 0
+        }
+    );
+    assert_eq!(slots[0].rebase_vmaddr(0x1_0000_0000), Some(0x1000));
+
+    // Kernel collections: 8-byte slots on a 4-byte stride, cache level and optional signing.
+    let words = [
+        (0, 0x100 | (1 << 30) | (2 << 51), 8),
+        (
+            8,
+            (1 << 63) | (3 << 49) | (1 << 48) | (0x77 << 32) | 0x200,
+            8,
+        ),
+    ];
+    let image = macho::MachO::from_buffer(fixup_image(
+        DYLD_CHAINED_PTR_64_KERNEL_CACHE,
+        0,
+        &[],
+        &[0],
+        1,
+        &words,
+    ))
+    .unwrap();
+    let slots = image.chained_fixup_slots().unwrap().unwrap();
+    assert_eq!(
+        slots[0].pointer,
+        ChainedPointer::CacheRebase {
+            target: 0x100,
+            cache_level: 1,
+            auth: None,
+            next: 8
+        }
+    );
+    assert_eq!(
+        slots[1].pointer,
+        ChainedPointer::CacheRebase {
+            target: 0x200,
+            cache_level: 0,
+            auth: Some(PointerAuth {
+                key: PointerAuthKey::DB,
+                diversity: 0x77,
+                address_diversity: true
+            }),
+            next: 0
+        }
+    );
+    // A cache-relative target is no address of this image.
+    assert_eq!(slots[0].rebase_vmaddr(0x1_0000_0000), None);
+
+    // Segmented rebases name a segment table entry and an offset in it.
+    let words = [
+        (0, 0x40 | (2 << 28) | (2 << 51), 8),
+        (8, (1 << 63) | (1 << 49) | (9 << 32) | (1 << 28) | 0x80, 8),
+    ];
+    let image = macho::MachO::from_buffer(fixup_image(
+        DYLD_CHAINED_PTR_ARM64E_SEGMENTED,
+        0,
+        &[],
+        &[0],
+        1,
+        &words,
+    ))
+    .unwrap();
+    let slots = image.chained_fixup_slots().unwrap().unwrap();
+    assert_eq!(
+        slots[0].pointer,
+        ChainedPointer::SegmentedRebase {
+            target_segment: 2,
+            target_offset: 0x40,
+            auth: None,
+            next: 8
+        }
+    );
+    assert_eq!(
+        slots[1].pointer,
+        ChainedPointer::SegmentedRebase {
+            target_segment: 1,
+            target_offset: 0x80,
+            auth: Some(PointerAuth {
+                key: PointerAuthKey::IB,
+                diversity: 9,
+                address_diversity: false
+            }),
+            next: 0
+        }
+    );
+}
+
+#[test]
+fn chained_pointer_decoding_of_shared_cache_32_bit_and_all_keys() {
+    use macho::dyld::*;
+    let decode = |format, max_valid, word| decode_chained_pointer_as(format, max_valid, word);
+    // Shared cache, plain rebase: 34-bit offset, 8-bit high8 above it, next at bit 52.
+    assert_eq!(
+        decode(
+            DYLD_CHAINED_PTR_ARM64E_SHARED_CACHE,
+            0,
+            (3 << 52) | (0x80 << 34) | 0x2_0000_0123
+        )
+        .unwrap(),
+        ChainedPointer::Rebase {
+            target: 0x2_0000_0123,
+            high8: 0x80,
+            next: 24
+        }
+    );
+    // Shared cache, authenticated, key bit clear: instruction key A.
+    assert_eq!(
+        decode(
+            DYLD_CHAINED_PTR_ARM64E_SHARED_CACHE,
+            0,
+            (1 << 63) | (2 << 52) | (1 << 50) | (0x1234 << 34) | 0x1000
+        )
+        .unwrap(),
+        ChainedPointer::AuthRebase {
+            target: 0x1000,
+            auth: PointerAuth {
+                key: PointerAuthKey::IA,
+                diversity: 0x1234,
+                address_diversity: true
+            },
+            next: 16
+        }
+    );
+    // PTR_32: an ordinary target is a rebase, whether or not a bound is given.
+    for max_valid in [0, 0x10_0000] {
+        assert_eq!(
+            decode(DYLD_CHAINED_PTR_32, max_valid, 0x1000 | (2 << 26)).unwrap(),
+            ChainedPointer::Rebase {
+                target: 0x1000,
+                high8: 0,
+                next: 8
+            }
+        );
+    }
+    // Without a bound, a large target is not turned into a non-pointer.
+    assert_eq!(
+        decode(DYLD_CHAINED_PTR_32, 0, 0x300_0000).unwrap(),
+        ChainedPointer::Rebase {
+            target: 0x300_0000,
+            high8: 0,
+            next: 0
+        }
+    );
+    // A plain segmented rebase has no signing bits to spare.
+    assert!(decode(DYLD_CHAINED_PTR_ARM64E_SEGMENTED, 0, 1 << 32).is_err());
+    // All four keys, from the two bits at 49.
+    for (bits, key) in [
+        (0, PointerAuthKey::IA),
+        (1, PointerAuthKey::IB),
+        (2, PointerAuthKey::DA),
+        (3, PointerAuthKey::DB),
+    ] {
+        let ChainedPointer::AuthRebase { auth, .. } = decode(
+            DYLD_CHAINED_PTR_ARM64E_USERLAND24,
+            0,
+            auth_rebase_word(0x10, 7, 0, bits, 0),
+        )
+        .unwrap() else {
+            panic!("not an authenticated rebase");
+        };
+        assert_eq!((auth.key, auth.diversity), (key, 7));
+    }
+}
+
+#[test]
+fn chained_fixup_tables_reject_malformed_headers() {
+    use macho::dyld::*;
+    let segment = chained_segment(DYLD_CHAINED_PTR_64_OFFSET, 0, &[0]);
+    let good = chained_blob(DYLD_CHAINED_IMPORT, &[], &[], &segment);
+    assert!(decode_chained_fixups(&good).is_ok());
+    let unsupported = |blob: &[u8]| {
+        matches!(
+            decode_chained_fixups(blob),
+            Err(FileParseError::UnsupportedFeature(_))
+        )
+    };
+    let overflow = |blob: &[u8]| {
+        matches!(
+            decode_chained_fixups(blob),
+            Err(FileParseError::BufferOverflow)
+        )
+    };
+    let invalid = |blob: &[u8]| {
+        matches!(
+            decode_chained_fixups(blob),
+            Err(FileParseError::InvalidFileFormat)
+        )
+    };
+
+    // An import table format that does not exist, and a version other than zero.
+    assert!(unsupported(&chained_blob(9, &[], &[], &segment)));
+    let mut blob = good.clone();
+    blob[0..4].copy_from_slice(&1u32.to_le_bytes());
+    assert!(unsupported(&blob));
+    // More imports than the table can hold.
+    let mut blob = good.clone();
+    set_import_count(&mut blob, 0x4000_0000);
+    assert!(overflow(&blob));
+    // More segments than the starts table can hold.
+    let mut blob = good.clone();
+    blob[28..32].copy_from_slice(&0x4000_0000u32.to_le_bytes());
+    assert!(overflow(&blob));
+    // A pointer format that does not exist, a zero page size, more pages than entries.
+    assert!(unsupported(&chained_blob(
+        DYLD_CHAINED_IMPORT,
+        &[],
+        &[],
+        &chained_segment(15, 0, &[0])
+    )));
+    let record = 36;
+    let mut blob = good.clone();
+    blob[record + 4..record + 6].copy_from_slice(&0u16.to_le_bytes());
+    assert!(invalid(&blob));
+    let mut blob = good.clone();
+    blob[record + 20..record + 22].copy_from_slice(&5u16.to_le_bytes());
+    assert!(overflow(&blob));
+
+    // Starts must lie in the page and be aligned to the stride.
+    let starts = |format, starts: &[u16]| {
+        chained_blob(
+            DYLD_CHAINED_IMPORT,
+            &[],
+            &[],
+            &chained_segment(format, 0, starts),
+        )
+    };
+    assert!(invalid(&starts(DYLD_CHAINED_PTR_64_OFFSET, &[0x1000])));
+    // Inside a multi-start list too.
+    assert!(invalid(&starts(
+        DYLD_CHAINED_PTR_64_OFFSET,
+        &[
+            DYLD_CHAINED_PTR_START_MULTI | 1,
+            0x11 | DYLD_CHAINED_PTR_START_LAST
+        ]
+    )));
+    // ... and a list index beyond the table.
+    assert!(invalid(&starts(
+        DYLD_CHAINED_PTR_64_OFFSET,
+        &[DYLD_CHAINED_PTR_START_MULTI | 9]
+    )));
+    // The x86-64 kernel cache is the one format with a one-byte stride.
+    assert!(decode_chained_fixups(&starts(DYLD_CHAINED_PTR_X86_64_KERNEL_CACHE, &[0x11])).is_ok());
+    assert!(invalid(&starts(DYLD_CHAINED_PTR_64_OFFSET, &[0x11])));
+}
+
+#[test]
+fn chained_fixups_command_must_hold_its_data_range() {
+    // linkedit_data_command is 16 bytes; a smaller cmdsize cannot name the blob.
+    let mut bytes = fixup_image(
+        macho::dyld::DYLD_CHAINED_PTR_ARM64E_USERLAND24,
+        0,
+        &[],
+        &[0],
+        1,
+        &[],
+    );
+    // 32-byte header, then two 72-byte segments: the fixups command follows.
+    let command = 32 + 2 * 72;
+    assert_eq!(&bytes[command..command + 4], &0x8000_0034u32.to_le_bytes());
+    assert!(macho::MachO::from_buffer(bytes.clone())
+        .unwrap()
+        .chained_fixups()
+        .unwrap()
+        .is_some());
+    bytes[command + 4..command + 8].copy_from_slice(&8u32.to_le_bytes());
+    let image = macho::MachO::from_buffer(bytes).unwrap();
+    assert!(matches!(
+        image.chained_fixups(),
+        Err(FileParseError::InvalidFileFormat)
+    ));
+}
+
+#[test]
+fn unix_thread_program_counter_arm_and_powerpc64() {
+    use hexspell::field::Field;
+    use macho::load_command::UnixThreadCommand;
+    fn thread(flavor: u32, state: Vec<u8>) -> UnixThreadCommand {
+        UnixThreadCommand {
+            flavor: Field::new(flavor, 8, 4),
+            count: Field::new((state.len() / 4) as u32, 12, 4),
+            state_offset: 16,
+            state,
+        }
+    }
+    let (arm, arm64, arm64_32, ppc64) = (12, 0x0100_000c, 0x0200_000c, 0x0100_0012);
+    // ARM_THREAD_STATE: r0-r12, sp, lr, pc (17 words), flavor 1 on ARM and 9 on arm64 images.
+    let mut state = vec![0; 68];
+    state[60..64].copy_from_slice(&0x8000u32.to_le_bytes());
+    for (cpu, flavor) in [(arm, 1), (arm64, 9), (arm64_32, 9)] {
+        let pc = thread(flavor, state.clone())
+            .program_counter(cpu, ByteOrder::Little)
+            .unwrap();
+        assert_eq!(
+            (pc.value, pc.offset, pc.size),
+            (0x8000, 16 + 60, 4),
+            "cpu {cpu:#x} flavor {flavor}"
+        );
+    }
+    // PPC_THREAD_STATE64: srr0 first, 64 bits wide, big endian.
+    let mut state = vec![0; 336];
+    state[..8].copy_from_slice(&0x1_0000_2f80u64.to_be_bytes());
+    let pc = thread(5, state)
+        .program_counter(ppc64, ByteOrder::Big)
+        .unwrap();
+    assert_eq!((pc.value, pc.offset, pc.size), (0x1_0000_2f80, 16, 8));
+    // The 32-bit flavor does not apply to a 64-bit PowerPC image.
+    assert!(thread(1, vec![0; 160])
+        .program_counter(ppc64, ByteOrder::Big)
+        .is_none());
+}
+
+#[test]
+fn empty_pages_stay_empty_in_segments_with_huge_page_tables() {
+    use macho::dyld::*;
+    // 0xFFFF (no fixups) also has the multi-start flag set; only the explicit check keeps it from
+    // being read as a list at index 0x7fff, which exists once a segment has more than 32767 pages.
+    let pages = 0x8001usize;
+    let mut segment = chained_segment(DYLD_CHAINED_PTR_64_OFFSET, 0, &vec![0xffff; pages]);
+    segment[20..22].copy_from_slice(&(pages as u16).to_le_bytes());
+    let blob = chained_blob(DYLD_CHAINED_IMPORT, &[], &[], &segment);
+    let fixups = decode_chained_fixups(&blob).unwrap();
+    let segment = &fixups.segments[0];
+    assert_eq!(segment.page_count, 0x8001);
+    for page in [0, 1, 0x7fff, 0x8000] {
+        assert_eq!(segment.chain_starts(page).count(), 0, "page {page:#x}");
+    }
+}
