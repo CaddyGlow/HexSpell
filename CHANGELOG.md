@@ -22,6 +22,8 @@
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-10-18
+
 - **Mach-O**
     - *Added*: Decode every `DYLD_CHAINED_PTR_*` format from Apple's `fixup-chains.h` (arm64e userland/userland24/kernel/firmware authenticated binds and rebases, `PTR_64`, 32-bit, kernel/shared cache and segmented), `DYLD_CHAINED_IMPORT_ADDEND`/`ADDEND64` imports and multi-start pages via `decode_chained_pointer_as` and `ChainedSegment::decode_pointer`.
     - *Added*: `MachO::chained_fixup_slots` walks chains into `ChainedFixupSlot`s with the on-disk word as a `Field`, decoded pointer and `rebase_vmaddr`; `PointerAuth::discriminator` mirrors dyld's address blending.
