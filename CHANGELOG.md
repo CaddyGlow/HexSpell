@@ -22,6 +22,14 @@
 
 ## [Unreleased]
 
+- **Mach-O**
+    - *Added*: Decode every `DYLD_CHAINED_PTR_*` format from Apple's `fixup-chains.h` (arm64e userland/userland24/kernel/firmware authenticated binds and rebases, `PTR_64`, 32-bit, kernel/shared cache and segmented), `DYLD_CHAINED_IMPORT_ADDEND`/`ADDEND64` imports and multi-start pages via `decode_chained_pointer_as` and `ChainedSegment::decode_pointer`.
+    - *Added*: `MachO::chained_fixup_slots` walks chains into `ChainedFixupSlot`s with the on-disk word as a `Field`, decoded pointer and `rebase_vmaddr`; `PointerAuth::discriminator` mirrors dyld's address blending.
+    - *Added*: `UnixThreadCommand::program_counter` returns the `LC_UNIXTHREAD` entry PC as a `Field` for x86, x86-64, ARM, arm64 and PowerPC thread states.
+    - *Changed*: **Breaking** — `ChainedSegment` stores the raw `page_start[]` table (`page_starts: Vec<u16>`, `page_count`) plus `pointer_format` and `max_valid_pointer`; use `chain_starts(page)`. `ChainedImport` gains `addend` and `library_ordinal` becomes `i32`; `ChainedFixups` gains `imports_format`. `ChainedPointer::Bind::addend` becomes `i64` and the enum gains authenticated, cache, segmented and non-pointer variants.
+    - *Fixed*: Decode 8-bit chained import ordinals 128–240 as dylib ordinals instead of negative special values.
+    - *Documentation*: Optional LIEF differential test for chained fixups (`tests/lief.rs`).
+
 ## [1.2.2] - 2026-10-18
 
 - **General**

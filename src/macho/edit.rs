@@ -334,7 +334,7 @@ impl<'a> MachOEdit<'a> {
     }
 
     fn validate_chained_slots(&self, target: &Range<usize>) -> Result<()> {
-        use super::dyld::{decode_chained_pointer, ChainedPointer};
+        use super::dyld::{decode_chained_pointer, ChainedPointer, DYLD_CHAINED_PTR_64_OFFSET};
         let image = &self.candidate;
         let Some(fixups) = image.chained_fixups()? else {
             return Ok(());
@@ -360,28 +360,34 @@ impl<'a> MachOEdit<'a> {
                 .get(starts.segment_index)
                 .ok_or_else(unsupported)?;
             let file = range(segment.fileoff(), segment.filesize())?;
-            if base.checked_add(starts.segment_offset) != Some(segment.vmaddr())
+            // Edits only re-validate the ordinary chains HexSpell's writer emits.
+            if starts.pointer_format != DYLD_CHAINED_PTR_64_OFFSET
+                || base.checked_add(starts.segment_offset) != Some(segment.vmaddr())
                 || segment.filesize() > segment.vmsize()
                 || file.end > image.buffer.len()
             {
                 return Err(unsupported());
             }
             let page_size = u64::from(starts.page_size);
-            for (page, start) in starts.page_starts.iter().enumerate() {
+            for page in 0..usize::from(starts.page_count) {
                 let page_start = (page as u64)
                     .checked_mul(page_size)
                     .ok_or(FileParseError::BufferOverflow)?;
                 if page_start >= segment.vmsize() {
                     return Err(unsupported());
                 }
-                let Some(start) = start else {
+                let mut chain_starts = starts.chain_starts(page);
+                let Some(start) = chain_starts.next() else {
                     continue;
                 };
+                if chain_starts.next().is_some() {
+                    return Err(unsupported());
+                }
                 let page_end = page_start
                     .checked_add(page_size)
                     .ok_or(FileParseError::BufferOverflow)?;
                 let mut offset = page_start
-                    .checked_add(u64::from(*start))
+                    .checked_add(u64::from(start))
                     .ok_or(FileParseError::BufferOverflow)?;
                 loop {
                     remaining = remaining.checked_sub(1).ok_or_else(unsupported)?;
@@ -410,6 +416,7 @@ impl<'a> MachOEdit<'a> {
                             next
                         }
                         ChainedPointer::Rebase { next, .. } => next,
+                        _ => return Err(unsupported()),
                     };
                     if next == 0 {
                         break;

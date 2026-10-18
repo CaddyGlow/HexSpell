@@ -52,6 +52,24 @@ synthetic images; every generated file has provenance and a SHA-256 hash in its
 manifest. See [benchmark instructions](../../tools/pe-bench/README.md) for corpus
 details, adding owned real-world files, and recording timing results.
 
+## Comparing Mach-O chained fixups with LIEF
+
+`tests/lief.rs` compares `MachO::chained_fixup_slots` with LIEF 1.0.0 for every
+slice of the given files: import count, every bind (slot address, symbol,
+addend) and every rebase (slot address, unslid target). LIEF does not expose
+arm64e signing fields, so authenticated rebases are checked structurally:
+instruction keys (IA/IB) must sign pointers into executable segments and data
+keys (DA/DB) pointers elsewhere. Pass any thin or FAT Mach-O files, for example
+binaries copied from a macOS system (Apple binaries are not committed):
+
+```sh
+python3 -m venv /tmp/hexspell-lief-venv
+/tmp/hexspell-lief-venv/bin/python -m pip install lief==1.0.0
+HEXSPELL_LIEF_PYTHON=/tmp/hexspell-lief-venv/bin/python \
+  HEXSPELL_MACHO_FIXUP_FILES=/path/to/nc:/path/to/zsh \
+  cargo test --test lief -- --ignored --nocapture
+```
+
 ## Generated EXE and DLL acceptance
 
 `inspect_generated_pe.py` independently checks the generation examples using

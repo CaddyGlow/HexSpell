@@ -203,6 +203,14 @@ fn parse_macho(data: &[u8]) {
         let _ = macho.symbols();
         let _ = macho.relocations();
         let _ = macho.exports();
+        let _ = macho.chained_fixup_slots();
+        if let Ok(commands) = macho.typed_commands() {
+            for command in commands {
+                if let macho::load_command::TypedCommand::UnixThread(thread) = command {
+                    let _ = thread.program_counter(macho.header.cpu_type.value, macho.byte_order());
+                }
+            }
+        }
         for (lazy, weak) in [(false, false), (true, false), (false, true)] {
             let _ = macho.bind_opcodes(lazy, weak);
         }
