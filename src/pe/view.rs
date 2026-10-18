@@ -80,6 +80,7 @@ impl<'a> PeHeaders<'a> {
     }
 
     /// Parse one section header without interpreting or copying its raw data.
+    #[inline]
     pub fn section(&self, index: usize) -> Result<PeSection, FileParseError> {
         if index >= self.coff.number_of_sections.value as usize {
             return Err(FileParseError::BufferOverflow);

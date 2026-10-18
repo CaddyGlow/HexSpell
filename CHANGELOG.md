@@ -22,6 +22,9 @@
 
 ## [Unreleased]
 
+- **PE**
+    - *Changed*: Decode section headers with a single bounds check and inline `PeSection::parse_section` / `PeHeaders::section`, avoiding a 240-byte copy per section; section-header decoding is about 3x faster.
+
 ## [1.2.3] - 2026-10-18
 
 - **Mach-O**

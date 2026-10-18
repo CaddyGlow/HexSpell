@@ -137,7 +137,7 @@ def main():
         "",
         f"{len(files)} files; {args.rounds} rounds of {args.milliseconds} ms per scope; medians below in microseconds.",
         "",
-        "Parsing scopes differ. HexSpell's owned scopes include the input copy; its borrowed view reads DOS/NT/COFF only, while the separate borrowed-all-fields scope decodes the optional header and iterates sections. object borrows headers and sections. Goblin's default parser also processes directories. pefile fast_load reads headers/sections; its default and supported-directories modes do more work. Compare each scope explicitly; this is not a single equivalent-work ranking.",
+        "Parsing scopes differ. HexSpell's owned scopes include the input copy; its borrowed view reads DOS/NT/COFF only, while the separate borrowed-all-fields scope decodes the optional header and iterates sections. object borrows headers and reads every section-header field. Goblin's default parser also processes directories. pefile fast_load reads headers/sections; its default and supported-directories modes do more work. Compare each scope explicitly; this is not a single equivalent-work ranking.",
         "",
         "File I/O, corpus generation, and process startup are excluded from timing. Python uses normal garbage collection with a collection before each timed round. min/max timings and iteration counts are retained in CSV. Run on an otherwise idle host for performance conclusions.",
         "",

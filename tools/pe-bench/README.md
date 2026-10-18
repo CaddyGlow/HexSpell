@@ -63,7 +63,7 @@ scope, and the CSV records min/median/max ns per iteration and iteration counts.
 | HexSpell borrowed all header fields and sections | Optional-header field decoding and section iteration, without copying the input buffer or collecting sections |
 | HexSpell owned default | `PE::from_buffer`, including buffer clone, eager headers/sections; base relocations are lazy |
 | HexSpell supported directories | Owned parse plus imports, exports, resources, TLS, debug, load config, bound/delay imports, and AMD64 exceptions |
-| object | Borrowed `PeFile32`/`PeFile64` and section iteration |
+| object | Borrowed `PeFile32`/`PeFile64` plus every section-header field, matching HexSpell's borrowed all-fields scope |
 | Goblin default | Borrowed default `PE::parse`, including its default directory processing |
 | pefile fast headers | `PE(data=..., fast_load=True)` |
 | pefile default | `PE(data=..., fast_load=False)` |

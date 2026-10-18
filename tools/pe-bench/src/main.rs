@@ -8,9 +8,34 @@ use hexspell::pe::{
     view::PeHeaders,
     PE,
 };
-use object::Object;
+use object::pe::{ImageNtHeaders32, ImageNtHeaders64};
+use object::read::pe::{ImageNtHeaders, PeFile};
+use object::LittleEndian as LE;
 
 type BenchResult<T> = Result<T, Box<dyn Error>>;
+
+/// Reads every section-header field, matching HexSpell's borrowed all-fields scope.
+/// `sections().count()` would return the table length without visiting any section.
+fn object_section_fields<Pe: ImageNtHeaders>(buffer: &[u8]) -> BenchResult<usize> {
+    let image = PeFile::<Pe>::parse(buffer)?;
+    black_box(&image);
+    let table = image.section_table();
+    for section in table.iter() {
+        black_box((
+            section.name,
+            section.virtual_size.get(LE),
+            section.virtual_address.get(LE),
+            section.size_of_raw_data.get(LE),
+            section.pointer_to_raw_data.get(LE),
+            section.pointer_to_relocations.get(LE),
+            section.pointer_to_linenumbers.get(LE),
+            section.number_of_relocations.get(LE),
+            section.number_of_linenumbers.get(LE),
+            section.characteristics.get(LE),
+        ));
+    }
+    Ok(table.len())
+}
 
 fn measure(
     mut action: impl FnMut() -> BenchResult<usize>,
@@ -147,21 +172,14 @@ fn run(path: &Path, milliseconds: u64, rounds: usize) -> BenchResult<()> {
             Ok(image.sections.len())
         },
     );
-    benchmark("object", "borrowed_pe_headers_and_sections", &mut || {
-        let count = match kind {
-            PEType::PE32 => {
-                let image = object::read::pe::PeFile32::parse(black_box(buffer.as_slice()))?;
-                black_box(&image);
-                image.sections().count()
-            }
-            PEType::PE32Plus => {
-                let image = object::read::pe::PeFile64::parse(black_box(buffer.as_slice()))?;
-                black_box(&image);
-                image.sections().count()
-            }
-        };
-        Ok(count)
-    });
+    benchmark(
+        "object",
+        "borrowed_pe_headers_and_section_fields",
+        &mut || match kind {
+            PEType::PE32 => object_section_fields::<ImageNtHeaders32>(black_box(&buffer)),
+            PEType::PE32Plus => object_section_fields::<ImageNtHeaders64>(black_box(&buffer)),
+        },
+    );
     benchmark("goblin", "borrowed_default_parse", &mut || {
         let image = goblin::pe::PE::parse(black_box(&buffer))?;
         black_box(&image);
