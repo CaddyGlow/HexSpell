@@ -29,7 +29,6 @@
     - *Changed*: **Breaking** — `ChainedSegment` stores the raw `page_start[]` table (`page_starts: Vec<u16>`, `page_count`) plus `pointer_format` and `max_valid_pointer`; use `chain_starts(page)`. `ChainedImport` gains `addend` and `library_ordinal` becomes `i32`; `ChainedFixups` gains `imports_format`. `ChainedPointer::Bind::addend` becomes `i64` and the enum gains authenticated, cache, segmented and non-pointer variants.
     - *Fixed*: Decode 8-bit chained import ordinals 128–240 as dylib ordinals instead of negative special values.
     - *Documentation*: Optional LIEF differential test for chained fixups (`tests/lief.rs`).
-    - *Chore*: Tests for the chained-fixup cases that had none: rebase target semantics per pointer format (vmaddr against image offset, `high8`), pages without fixups including segments with more than 32767 pages, all four signing keys, 32-bit, kernel-cache and segmented chains, shared-cache plain rebases, malformed headers and tables, and the ARM and PowerPC64 `LC_UNIXTHREAD` layouts. Line coverage of the chained-fixup code is 99.8%.
 
 ## [1.2.2] - 2026-10-18
 
