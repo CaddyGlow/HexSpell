@@ -1,4 +1,10 @@
-#![cfg(feature = "std")]
+#![cfg(all(
+    feature = "std",
+    feature = "pe",
+    feature = "elf",
+    feature = "macho",
+    feature = "common"
+))]
 
 /// General tests for shared utilities
 /// ==================================
@@ -199,4 +205,102 @@ fn test_utf8_multibyte() {
             .all(|&b| b == 0),
         "Remaining bytes were not zero-padded after UTF-8 write"
     );
+}
+
+#[test]
+fn field_accessor_metadata_and_big_endian_updates() {
+    use hexspell::field::{ByteOrder, Field, FieldMut, NumericFieldMut};
+    let mut buffer = [0xa5; 16];
+    let mut short = Field::new(7u16, 2, 2);
+    let mut accessor = FieldMut::<u16>::new(&mut short);
+    assert_eq!(
+        (accessor.value(), accessor.offset(), accessor.size()),
+        (7, 2, 2)
+    );
+    accessor
+        .update_with(&mut buffer, 0x1234, ByteOrder::Big)
+        .unwrap();
+    assert_eq!(&buffer[2..4], &[0x12, 0x34]);
+    let mut word = Field::new(8u32, 4, 4);
+    let accessor = FieldMut::<u32>::new(&mut word);
+    assert_eq!(
+        (accessor.value(), accessor.offset(), accessor.size()),
+        (8, 4, 4)
+    );
+    let numeric = NumericFieldMut::U32(&mut word);
+    assert_eq!(
+        (numeric.value(), numeric.offset(), numeric.size()),
+        (8, 4, 4)
+    );
+    let mut wide = Field::new(9u64, 8, 8);
+    let mut numeric = NumericFieldMut::U64(&mut wide);
+    assert_eq!(
+        (numeric.value(), numeric.offset(), numeric.size()),
+        (9, 8, 8)
+    );
+    numeric
+        .update_with(&mut buffer, 0x123456789abcdef0, ByteOrder::Big)
+        .unwrap();
+    assert_eq!(
+        &buffer[8..],
+        &[0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0]
+    );
+    assert_eq!(&buffer[..2], &[0xa5; 2]);
+}
+
+#[test]
+fn promoted_numeric_fields_reject_overflow_without_mutation() {
+    use hexspell::errors::FileParseError;
+    use hexspell::field::{ByteOrder, Field};
+    for order in [ByteOrder::Little, ByteOrder::Big] {
+        let mut buffer = [0xa5; 8];
+        let mut short = Field::new(0u16, 1, 1);
+        short.update_with(&mut buffer, 0x12, order).unwrap();
+        let before = buffer;
+        assert!(matches!(
+            short.update_with(&mut buffer, 0x100, order),
+            Err(FileParseError::ValueTooLarge)
+        ));
+        assert_eq!(short.value, 0x12);
+        assert_eq!(buffer, before);
+        let mut word = Field::new(0u32, 1, 2);
+        word.update_with(&mut buffer, 0x1234, order).unwrap();
+        let before = buffer;
+        assert!(matches!(
+            word.update_with(&mut buffer, 0x10000, order),
+            Err(FileParseError::ValueTooLarge)
+        ));
+        assert_eq!(word.value, 0x1234);
+        assert_eq!(buffer, before);
+        let mut wide = Field::new(0u64, 1, 4);
+        wide.update_with(&mut buffer, 0x12345678, order).unwrap();
+        let before = buffer;
+        assert!(matches!(
+            wide.update_with(&mut buffer, 1 << 32, order),
+            Err(FileParseError::ValueTooLarge)
+        ));
+        assert_eq!(wide.value, 0x12345678);
+        assert_eq!(buffer, before);
+    }
+}
+
+#[test]
+fn error_messages_and_io_sources_preserve_context() {
+    use hexspell::errors::FileParseError;
+    use std::error::Error;
+    for (error, expected) in [
+        (FileParseError::InvalidFileFormat, "Invalid file format."),
+        (FileParseError::BufferOverflow, "Data out of bounds."),
+        (FileParseError::ValueTooLarge, "Value exceeds field size."),
+        (
+            FileParseError::UnsupportedFeature("compression".into()),
+            "Unsupported feature: compression",
+        ),
+    ] {
+        assert_eq!(error.to_string(), expected);
+        assert!(error.source().is_none());
+    }
+    let error = FileParseError::from(std::io::Error::other("read failed"));
+    assert_eq!(error.to_string(), "I/O error: read failed");
+    assert_eq!(error.source().unwrap().to_string(), "read failed");
 }

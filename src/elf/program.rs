@@ -333,7 +333,7 @@ impl ProgramHeaderEntry {
         buffer: &[u8],
         offset: u64,
         size: u16,
-        count: u16,
+        count: usize,
         class: ElfClass,
         order: ByteOrder,
     ) -> Result<Vec<Self>, errors::FileParseError> {
@@ -348,7 +348,6 @@ impl ProgramHeaderEntry {
             return Err(errors::FileParseError::InvalidFileFormat);
         }
         let start = usize::try_from(offset).map_err(|_| errors::FileParseError::BufferOverflow)?;
-        let count = usize::from(count);
         let length = count
             .checked_mul(usize::from(size))
             .ok_or(errors::FileParseError::BufferOverflow)?;

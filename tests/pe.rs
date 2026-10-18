@@ -1,4 +1,4 @@
-#![cfg(feature = "std")]
+#![cfg(all(feature = "std", feature = "pe", feature = "common"))]
 
 /// HexSpell PE
 /// ====================================
@@ -550,6 +550,32 @@ fn test_pe_insert_section_parsed_short_name_no_panic() {
     let _ = pe.insert_section_raw(parsed, vec![0x90; 4]);
 }
 
+/// insert_section on a file that ends before its own SizeOfHeaders must fail, not panic.
+#[test]
+fn test_pe_insert_section_truncated_headers_no_panic() {
+    let full = fs::read("tests/samples/sample1.exe").expect("read sample");
+    let mut pe = pe::PE::from_buffer(full).expect("parse sample");
+    let table_end = pe.sections.last().unwrap().characteristics.offset + 4;
+
+    // Header area nearly full (forces the header growth path) and a file that stops at the end
+    // of the section table, short of SizeOfHeaders.
+    let size_of_headers = table_end as u32 + 8;
+    pe.optional_header
+        .size_of_headers
+        .update(&mut pe.buffer, size_of_headers)
+        .expect("patch SizeOfHeaders");
+    let mut truncated = pe::PE::from_buffer(pe.buffer[..table_end].to_vec()).expect("parse");
+
+    let before = truncated.buffer.clone();
+    let result = truncated.insert_section(pe::section::NewSection {
+        name: ".new".into(),
+        data: vec![0x90; 16],
+        characteristics: 0x6000_0020,
+    });
+    assert!(result.is_err());
+    assert_eq!(truncated.buffer, before, "failed insert changed the buffer");
+}
+
 /// Parsing an invalid PE buffer should return an error
 #[test]
 fn test_pe_invalid_buffer() {
@@ -1007,7 +1033,7 @@ fn test_pe_resource_tree_synthetic() {
     // Root directory: 1 named entry, 0 id entries
     buffer[0x0c..0x0e].copy_from_slice(&1u16.to_le_bytes()); // named entries
                                                              // Entry: name offset 0x30, data offset 0x50 (leaf)
-    buffer[0x10..0x14].copy_from_slice(&0x30u32.to_le_bytes());
+    buffer[0x10..0x14].copy_from_slice(&0x8000_0030u32.to_le_bytes());
     buffer[0x14..0x18].copy_from_slice(&0x50u32.to_le_bytes()); // leaf (high bit clear)
                                                                 // Unicode name at 0x30: length 4 chars "TEST"
     buffer[0x30..0x32].copy_from_slice(&4u16.to_le_bytes());
@@ -1579,4 +1605,126 @@ fn test_pe_tls_directory_preserves_values_and_file_field_offsets() {
             (0x0050_0000, offset + 4 * width + 4, 4)
         );
     }
+}
+
+#[test]
+fn section_characteristics_and_string_boundaries() {
+    use hexspell::pe::section::{Characteristics, PeSection};
+    let mut buffer = vec![0u8; 64];
+    buffer[..8].copy_from_slice(b".strings");
+    buffer[16..20].copy_from_slice(&11u32.to_le_bytes());
+    buffer[20..24].copy_from_slice(&40u32.to_le_bytes());
+    buffer[40..51].copy_from_slice(b"abc_1!x!end");
+    let mut section = PeSection::parse_section(&buffer, 0).unwrap();
+    assert_eq!(
+        section.extract_strings(&buffer, 3).unwrap(),
+        ["abc_1", "end"]
+    );
+    assert_eq!(section.extract_strings(&buffer, 5).unwrap(), ["abc_1"]);
+    assert!(section.extract_strings(&buffer, 6).unwrap().is_empty());
+    let masks = [
+        Characteristics::Executable.to_u32(),
+        Characteristics::Writeable.to_u32(),
+        Characteristics::Readable.to_u32(),
+        Characteristics::Code.to_u32(),
+        Characteristics::Discardable.to_u32(),
+        Characteristics::Tls.to_u32(),
+        0x40,
+        0x80,
+    ];
+    assert_eq!(
+        masks,
+        [0x20000000, 0x80000000, 0x40000000, 0x20, 0x02000000, 0x400, 0x40, 0x80]
+    );
+    for (index, mask) in masks.iter().enumerate() {
+        section.characteristics.value = *mask;
+        assert_eq!(
+            [
+                section.is_executable(),
+                section.is_writable(),
+                section.is_readable(),
+                section.has_code(),
+                section.is_discardable(),
+                section.has_tls(),
+                section.has_initialized_data(),
+                section.has_uninitialized_data(),
+            ],
+            std::array::from_fn(|i| i == index)
+        );
+    }
+    section.size_of_raw_data.value = 100;
+    assert!(matches!(
+        section.extract_strings(&buffer, 3),
+        Err(hexspell::errors::FileParseError::BufferOverflow)
+    ));
+}
+
+#[test]
+fn coff_section_relocations_preserve_fields_and_filter_by_rva() {
+    use hexspell::pe::section_reloc::SectionRelocation;
+    use hexspell::pe::PE;
+    let mut pe = PE::from_file("tests/samples/sample1.exe").unwrap();
+    let offset = pe.buffer.len();
+    let rva = pe.sections[0].virtual_address.value;
+    for address in [rva, rva + 4] {
+        pe.buffer.extend_from_slice(&address.to_le_bytes());
+        pe.buffer.extend_from_slice(&7u32.to_le_bytes());
+        pe.buffer.extend_from_slice(&6u16.to_le_bytes());
+    }
+    pe.sections[0]
+        .pointer_to_relocations
+        .update(&mut pe.buffer, offset as u32)
+        .unwrap();
+    pe.sections[0]
+        .number_of_relocations
+        .update(&mut pe.buffer, 2)
+        .unwrap();
+    let block = pe.section_relocations(0).unwrap();
+    assert_eq!(
+        (block.offset, block.section_index, block.entries.len()),
+        (offset, 0, 2)
+    );
+    let entry = &block.entries[0];
+    assert_eq!(
+        (
+            entry.virtual_address.value,
+            entry.symbol_table_index.value,
+            entry.reloc_type.value
+        ),
+        (rva, 7, 6)
+    );
+    assert_eq!(
+        (
+            entry.virtual_address.offset,
+            entry.symbol_table_index.offset,
+            entry.reloc_type.offset
+        ),
+        (offset, offset + 4, offset + 8)
+    );
+    assert_eq!(
+        (
+            entry.virtual_address.size,
+            entry.symbol_table_index.size,
+            entry.reloc_type.size
+        ),
+        (4, 4, 2)
+    );
+    let hits = hexspell::reloc::pe_section_relocs_at_rva(&pe, rva).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        (hits[0].section_index, hits[0].rva, hits[0].file_offset),
+        (0, rva, pe.sections[0].pointer_to_raw_data.value as usize)
+    );
+    assert!(hexspell::reloc::pe_section_relocs_at_rva(&pe, rva + 8)
+        .unwrap()
+        .is_empty());
+    pe.buffer.pop();
+    assert!(matches!(
+        pe.section_relocations(0),
+        Err(hexspell::errors::FileParseError::BufferOverflow)
+    ));
+    assert!(matches!(
+        SectionRelocation::parse(&[0; 9], 0),
+        Err(hexspell::errors::FileParseError::BufferOverflow)
+    ));
 }

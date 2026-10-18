@@ -1,15 +1,22 @@
 //! Cross-format validation: file-range overlap detection, VA/file-offset translation, and
 //! lightweight consistency checks.
 
+#[cfg(any(feature = "pe", feature = "elf", feature = "macho"))]
 use alloc::format;
 use alloc::string::String;
+#[cfg(feature = "macho")]
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
+#[cfg(feature = "elf")]
 use crate::elf::ELF;
+#[cfg(any(feature = "pe", feature = "elf", feature = "macho"))]
 use crate::errors::FileParseError;
+#[cfg(feature = "macho")]
 use crate::macho::MachO;
+#[cfg(feature = "pe")]
 use crate::pe::header::ImageBase;
+#[cfg(feature = "pe")]
 use crate::pe::PE;
 
 /// Half-open file byte range `[start, end)`.
@@ -54,6 +61,7 @@ pub fn find_overlaps(ranges: &[FileRange]) -> Vec<Overlap> {
 }
 
 /// File-backed PE section ranges (`PointerToRawData` .. `+SizeOfRawData`).
+#[cfg(feature = "pe")]
 pub fn pe_file_ranges<B: core::ops::Deref<Target = [u8]>>(pe: &PE<B>) -> Vec<FileRange> {
     pe.sections
         .iter()
@@ -75,6 +83,7 @@ pub fn pe_file_ranges<B: core::ops::Deref<Target = [u8]>>(pe: &PE<B>) -> Vec<Fil
 }
 
 /// File-backed ELF section ranges (`sh_offset` .. `+sh_size`, skipping `SHT_NOBITS`).
+#[cfg(feature = "elf")]
 pub fn elf_file_ranges<B: core::ops::Deref<Target = [u8]>>(elf: &ELF<B>) -> Vec<FileRange> {
     elf.section_headers
         .iter()
@@ -98,6 +107,7 @@ pub fn elf_file_ranges<B: core::ops::Deref<Target = [u8]>>(elf: &ELF<B>) -> Vec<
 }
 
 /// File-backed Mach-O segment ranges (`fileoff` .. `+filesize`).
+#[cfg(feature = "macho")]
 pub fn macho_file_ranges<B: core::ops::Deref<Target = [u8]>>(macho: &MachO<B>) -> Vec<FileRange> {
     macho
         .segments
@@ -119,6 +129,7 @@ pub fn macho_file_ranges<B: core::ops::Deref<Target = [u8]>>(macho: &MachO<B>) -
 }
 
 /// Maps a PE RVA to a file offset (wrapper around [`PE::rva_to_offset`]).
+#[cfg(feature = "pe")]
 pub fn pe_rva_to_file_offset<B: core::ops::Deref<Target = [u8]>>(
     pe: &PE<B>,
     rva: u32,
@@ -127,6 +138,7 @@ pub fn pe_rva_to_file_offset<B: core::ops::Deref<Target = [u8]>>(
 }
 
 /// Maps a PE VA (preferred image base + RVA) to a file offset.
+#[cfg(feature = "pe")]
 pub fn pe_va_to_file_offset<B: core::ops::Deref<Target = [u8]>>(
     pe: &PE<B>,
     va: u64,
@@ -143,6 +155,7 @@ pub fn pe_va_to_file_offset<B: core::ops::Deref<Target = [u8]>>(
 }
 
 /// Maps an ELF virtual address to a file offset using `PT_LOAD` segments.
+#[cfg(feature = "elf")]
 pub fn elf_va_to_file_offset<B: core::ops::Deref<Target = [u8]>>(
     elf: &ELF<B>,
     va: u64,
@@ -169,6 +182,7 @@ pub fn elf_va_to_file_offset<B: core::ops::Deref<Target = [u8]>>(
 }
 
 /// Maps a Mach-O virtual address to a file offset using segment load commands.
+#[cfg(feature = "macho")]
 pub fn macho_va_to_file_offset<B: core::ops::Deref<Target = [u8]>>(
     macho: &MachO<B>,
     va: u64,
@@ -198,6 +212,7 @@ pub struct ValidationIssue {
 }
 
 /// Checks PE header/section invariants that HexSpell relies on when patching.
+#[cfg(feature = "pe")]
 pub fn pe_consistency<B: core::ops::Deref<Target = [u8]>>(pe: &PE<B>) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
@@ -240,6 +255,7 @@ pub fn pe_consistency<B: core::ops::Deref<Target = [u8]>>(pe: &PE<B>) -> Vec<Val
 }
 
 /// Checks ELF program/section header consistency.
+#[cfg(feature = "elf")]
 pub fn elf_consistency<B: core::ops::Deref<Target = [u8]>>(elf: &ELF<B>) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
@@ -272,6 +288,7 @@ pub fn elf_consistency<B: core::ops::Deref<Target = [u8]>>(elf: &ELF<B>) -> Vec<
 }
 
 /// Checks Mach-O load-command size accounting.
+#[cfg(feature = "macho")]
 pub fn macho_consistency<B: core::ops::Deref<Target = [u8]>>(
     macho: &MachO<B>,
 ) -> Vec<ValidationIssue> {

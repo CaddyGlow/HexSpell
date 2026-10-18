@@ -88,3 +88,40 @@ original file offsets and sizes. Owned imports store descriptor fields once in
 Base relocations are parsed from the buffer on demand rather than cached on PE.
 ELF `ProgramHeaderEntry::parse_one` and `SectionHeaderEntry::parse_one`
 return the existing layout types without intermediate vector storage.
+
+## Writer specifications and edit reports
+
+With `elf,write`/`macho,write`, owned builder specifications deliberately contain
+no `Field` offsets: they have no file layout until serialization. The result of
+`build` is the existing `ELF` or `MachO` object, whose field accessors retain the
+same offsets and widths listed above. `build_with_layout` also returns file/virtual
+placement data; virtual-only sections have no file payload location.
+
+Transactional edit sessions reparse committed bytes, so returned objects have
+current `Field` offsets. Every supported custom-data edit preserves existing mapped
+virtual addresses. Append-only ELF growth updates section offsets/sizes; additions
+rebuild section-name/header tables while preserving existing indices. Mach-O growth
+updates only the owned custom segment/section ranges. Edit reports list overwritten
+metadata/payload ranges, logical moved payload ranges, build-ID consequences and
+external signing requirements. FAT rebuild reports remain relative to the selected
+thin slice. No new header field accessor layout is introduced.
+
+
+## Signature-container fields
+
+PE `WinCertificate::{length, revision, certificate_type}` retain their on-disk
+`Field` offsets and sizes. With `pe,write`, `CertificateTableOwned` serializes
+owned records; PE certificate-table edits update the security directory (a file
+offset, not an RVA) and checksum, then reparse the result.
+
+Mach-O `code_signature()` returns `LinkeditDataCommand::{dataoff, datasize}` as
+four-byte `Field` values at command offsets +8 and +12. With `macho,write`, reserve
+final command/segment metadata before hashing; `write_code_signature` changes only
+the reserved payload. See the [signing guide](guide.md#signature-containers-and-external-signers).
+
+
+ELF `signature::AppendedSignature` models the Linux twelve-byte trailer info block:
+`algo`, `hash`, `id_type`, `signer_len`, `key_id_len` (one-byte Fields), `padding`
+(three-byte Field), and `sig_len` (four-byte Field). Always update `sig_len` with
+`ByteOrder::Big`, independent of `EI_DATA`. `signed_range` excludes the signature,
+information block and marker; no ELF section or program header describes the trailer.

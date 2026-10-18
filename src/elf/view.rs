@@ -84,8 +84,24 @@ impl<'a> ElfHeaders<'a> {
         if self.header.sh_off.value == 0 {
             return Ok(0);
         }
-        usize::try_from(self.section_entry(0)?.sh_size())
-            .map_err(|_| FileParseError::BufferOverflow)
+        let count = usize::try_from(self.section_entry(0)?.sh_size())
+            .map_err(|_| FileParseError::BufferOverflow)?;
+        if count < 0xff00 {
+            return Err(FileParseError::InvalidFileFormat);
+        }
+        Ok(count)
+    }
+
+    /// Resolves the section-name table index, including canonical `SHN_XINDEX`.
+    pub fn section_name_table_index(&self) -> Result<usize, FileParseError> {
+        if self.header.sh_strndx.value != 0xffff {
+            return Ok(usize::from(self.header.sh_strndx.value));
+        }
+        let index = self.section_entry(0)?.sh_link() as usize;
+        if index < 0xff00 {
+            return Err(FileParseError::InvalidFileFormat);
+        }
+        Ok(index)
     }
 
     /// Parses one section header on demand; without allocating.
@@ -99,7 +115,11 @@ impl<'a> ElfHeaders<'a> {
     /// Resolves the program count, reading section zero only for extended numbering.
     pub fn program_count(&self) -> Result<usize, FileParseError> {
         if self.header.ph_num.value == 0xffff {
-            return Ok(self.section_entry(0)?.sh_info() as usize);
+            let count = self.section_entry(0)?.sh_info() as usize;
+            if count < 0xffff {
+                return Err(FileParseError::InvalidFileFormat);
+            }
+            return Ok(count);
         }
         Ok(usize::from(self.header.ph_num.value))
     }

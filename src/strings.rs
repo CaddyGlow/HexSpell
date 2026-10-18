@@ -4,19 +4,27 @@
 //! Mach-O symtab / dylib cstring pools share the same on-disk encoding. This module centralizes
 //! reading and exposes thin per-format wrappers.
 
-use alloc::borrow::{Cow, ToOwned};
+use alloc::borrow::Cow;
+#[cfg(all(feature = "common", feature = "pe"))]
+use alloc::borrow::ToOwned;
+#[cfg(all(feature = "common", feature = "pe"))]
 use alloc::format;
 use alloc::string::String;
+#[cfg(all(feature = "common", any(feature = "pe", feature = "macho")))]
 use alloc::vec::Vec;
 
 use crate::errors::FileParseError;
+#[cfg(all(feature = "common", feature = "macho"))]
 use crate::macho::MachO;
+#[cfg(all(feature = "common", feature = "pe"))]
 use crate::pe::import::{ImportDirectory, ImportEntry};
+#[cfg(all(feature = "common", feature = "pe"))]
 use crate::pe::PE;
 
 /// Reads a NUL-terminated string at an absolute file offset.
 ///
 /// Invalid UTF-8 is decoded lossily (same policy as ELF `.strtab` resolution).
+#[cfg(feature = "common")]
 pub fn read_c_string(buffer: &[u8], offset: usize) -> Result<String, FileParseError> {
     Ok(read_c_string_ref(buffer, offset)?.into_owned())
 }
@@ -24,6 +32,7 @@ pub fn read_c_string(buffer: &[u8], offset: usize) -> Result<String, FileParseEr
 /// Reads a string inside a cstring pool (`stroff` .. `stroff + strsize`).
 ///
 /// Index `0` is the empty name per Mach-O / COFF conventions.
+#[cfg(feature = "common")]
 pub fn read_c_string_in_pool(
     buffer: &[u8],
     pool_offset: usize,
@@ -35,6 +44,7 @@ pub fn read_c_string_in_pool(
 
 /// View of a Mach-O `LC_SYMTAB` string pool.
 #[derive(Debug, Clone, Copy)]
+#[cfg(feature = "common")]
 pub struct CStringPool {
     /// Absolute file offset of the pool (Mach-O `stroff`).
     pub offset: usize,
@@ -42,6 +52,7 @@ pub struct CStringPool {
     pub size: usize,
 }
 
+#[cfg(feature = "common")]
 impl CStringPool {
     /// Resolves a name without copying valid UTF-8 bytes.
     pub fn resolve_ref<'a>(
@@ -59,6 +70,7 @@ impl CStringPool {
 }
 
 /// Resolves a PE section name, including COFF long names (`/123` → string table offset).
+#[cfg(all(feature = "common", feature = "pe"))]
 pub fn pe_section_name<B: core::ops::Deref<Target = [u8]>>(
     pe: &PE<B>,
     index: usize,
@@ -90,6 +102,7 @@ pub fn pe_section_name<B: core::ops::Deref<Target = [u8]>>(
 }
 
 /// Collects DLL names and imported symbol names from the PE import directory.
+#[cfg(all(feature = "common", feature = "pe"))]
 pub fn pe_import_strings<B: core::ops::Deref<Target = [u8]>>(
     pe: &PE<B>,
 ) -> Result<Vec<(String, Vec<String>)>, FileParseError> {
@@ -98,6 +111,7 @@ pub fn pe_import_strings<B: core::ops::Deref<Target = [u8]>>(
 }
 
 /// Same as [`pe_import_strings`] but reuses a parsed [`ImportDirectory`].
+#[cfg(all(feature = "common", feature = "pe"))]
 pub fn pe_import_strings_from_directory(imports: &ImportDirectory) -> Vec<(String, Vec<String>)> {
     imports
         .dlls
@@ -117,6 +131,7 @@ pub fn pe_import_strings_from_directory(imports: &ImportDirectory) -> Vec<(Strin
 }
 
 /// Returns exported symbol names when an export directory is present.
+#[cfg(all(feature = "common", feature = "pe"))]
 pub fn pe_export_names<B: core::ops::Deref<Target = [u8]>>(
     pe: &PE<B>,
 ) -> Result<Vec<String>, FileParseError> {
@@ -127,6 +142,7 @@ pub fn pe_export_names<B: core::ops::Deref<Target = [u8]>>(
 }
 
 /// Returns the Mach-O symtab cstring pool when `LC_SYMTAB` is present.
+#[cfg(all(feature = "common", feature = "macho"))]
 pub fn macho_symtab_string_pool<B: core::ops::Deref<Target = [u8]>>(
     macho: &MachO<B>,
 ) -> Result<Option<CStringPool>, FileParseError> {
@@ -144,6 +160,7 @@ pub fn macho_symtab_string_pool<B: core::ops::Deref<Target = [u8]>>(
 }
 
 /// Resolves every dylib path referenced by load commands (weak / re-export / lazy included).
+#[cfg(all(feature = "common", feature = "macho"))]
 pub fn macho_dylib_paths<B: core::ops::Deref<Target = [u8]>>(
     macho: &MachO<B>,
 ) -> Result<Vec<String>, FileParseError> {
@@ -166,6 +183,7 @@ pub fn read_c_string_ref(buffer: &[u8], offset: usize) -> Result<Cow<'_, str>, F
 }
 
 /// Borrows a string within a bounded pool, retaining the owned helper's decoding policy.
+#[cfg(feature = "common")]
 pub fn read_c_string_in_pool_ref(
     buffer: &[u8],
     pool_offset: usize,
@@ -191,7 +209,7 @@ pub fn read_c_string_in_pool_ref(
     Ok(String::from_utf8_lossy(&slice[..stop]))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "common"))]
 mod tests {
     use super::*;
 

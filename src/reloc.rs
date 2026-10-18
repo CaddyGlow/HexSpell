@@ -11,16 +11,24 @@
 //! | ELF | `.rel` / `.rela` sections | `r_offset` (VA) | arch-specific `R_*` in `r_info` |
 //! | Mach-O | `section.reloff` | section-relative offset | `relocation_info` (not decoded yet) |
 
+#[cfg(any(feature = "pe", feature = "elf"))]
 use alloc::vec::Vec;
 
+#[cfg(feature = "elf")]
 use crate::elf::relocation::RelocationEntry;
+#[cfg(feature = "elf")]
 use crate::elf::ELF;
+#[cfg(any(feature = "pe", feature = "elf"))]
 use crate::errors::FileParseError;
+#[cfg(feature = "pe")]
 use crate::pe::relocation::{BaseRelocationBlock, BaseRelocationEntry};
+#[cfg(feature = "pe")]
 use crate::pe::section_reloc::SectionRelocation;
+#[cfg(feature = "pe")]
 use crate::pe::PE;
 
 /// One PE base relocation targeting a specific RVA.
+#[cfg(feature = "pe")]
 #[derive(Debug, Clone)]
 pub struct PeBaseRelocHit {
     pub page_rva: u32,
@@ -30,6 +38,7 @@ pub struct PeBaseRelocHit {
 }
 
 /// One PE COFF section relocation targeting a specific RVA.
+#[cfg(feature = "pe")]
 #[derive(Debug, Clone)]
 pub struct PeSectionRelocHit {
     pub section_index: usize,
@@ -39,6 +48,7 @@ pub struct PeSectionRelocHit {
 }
 
 /// ELF relocation with the owning section index.
+#[cfg(feature = "elf")]
 #[derive(Debug, Clone)]
 pub struct ElfRelocHit {
     pub section_index: usize,
@@ -46,6 +56,7 @@ pub struct ElfRelocHit {
 }
 
 /// Lists PE base relocations whose patched RVA equals `rva`.
+#[cfg(feature = "pe")]
 pub fn pe_base_relocs_at_rva<B: core::ops::Deref<Target = [u8]>>(
     pe: &PE<B>,
     rva: u32,
@@ -71,6 +82,7 @@ pub fn pe_base_relocs_at_rva<B: core::ops::Deref<Target = [u8]>>(
 }
 
 /// Lists every PE base relocation entry from the current buffer.
+#[cfg(feature = "pe")]
 pub fn pe_base_relocs<B: core::ops::Deref<Target = [u8]>>(
     pe: &PE<B>,
 ) -> Result<Vec<PeBaseRelocHit>, FileParseError> {
@@ -94,6 +106,7 @@ pub fn pe_base_relocs<B: core::ops::Deref<Target = [u8]>>(
 }
 
 /// Lists PE COFF section relocations at `rva` across all sections.
+#[cfg(feature = "pe")]
 pub fn pe_section_relocs_at_rva<B: core::ops::Deref<Target = [u8]>>(
     pe: &PE<B>,
     rva: u32,
@@ -116,6 +129,7 @@ pub fn pe_section_relocs_at_rva<B: core::ops::Deref<Target = [u8]>>(
 }
 
 /// Lists PE base relocations whose patched slot maps to `file_offset`.
+#[cfg(feature = "pe")]
 pub fn pe_relocs_at_file_offset<B: core::ops::Deref<Target = [u8]>>(
     pe: &PE<B>,
     file_offset: usize,
@@ -142,6 +156,7 @@ pub fn pe_relocs_at_file_offset<B: core::ops::Deref<Target = [u8]>>(
 }
 
 /// Lists ELF relocations whose `r_offset` equals `va`.
+#[cfg(feature = "elf")]
 pub fn elf_relocs_at_va<B: core::ops::Deref<Target = [u8]>>(
     elf: &ELF<B>,
     va: u64,
@@ -161,6 +176,7 @@ pub fn elf_relocs_at_va<B: core::ops::Deref<Target = [u8]>>(
 }
 
 /// Lists ELF relocations whose `r_offset` maps to `file_offset` via [`crate::validation::elf_va_to_file_offset`].
+#[cfg(feature = "elf")]
 pub fn elf_relocs_at_file_offset<B: core::ops::Deref<Target = [u8]>>(
     elf: &ELF<B>,
     file_offset: usize,
@@ -181,6 +197,7 @@ pub fn elf_relocs_at_file_offset<B: core::ops::Deref<Target = [u8]>>(
 }
 
 /// Parses PE base relocations on demand from the current image.
+#[cfg(feature = "pe")]
 pub fn pe_parse_base_relocations<B: core::ops::Deref<Target = [u8]>>(
     pe: &PE<B>,
 ) -> Result<Vec<BaseRelocationBlock>, FileParseError> {

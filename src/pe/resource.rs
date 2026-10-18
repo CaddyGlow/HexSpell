@@ -1,5 +1,20 @@
 //! Resource directory tree (`IMAGE_RESOURCE_DIRECTORY` / `ENTRY` / `DATA`).
 
+#[cfg(feature = "write")]
+mod edit;
+#[cfg(feature = "write")]
+pub mod icon;
+#[cfg(feature = "write")]
+mod owned;
+#[cfg(feature = "write")]
+pub mod strings;
+#[cfg(feature = "write")]
+pub mod version;
+#[cfg(feature = "write")]
+pub use edit::*;
+#[cfg(feature = "write")]
+pub use owned::*;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -93,7 +108,10 @@ impl ResourceDirectory {
 
     /// Parses a resource directory at `offset`.
     pub fn parse(buffer: &[u8], offset: usize) -> Result<Self, FileParseError> {
-        if buffer.len() < offset + Self::SIZE {
+        if offset
+            .checked_add(Self::SIZE)
+            .is_none_or(|end| end > buffer.len())
+        {
             return Err(FileParseError::BufferOverflow);
         }
 
@@ -114,7 +132,10 @@ impl ResourceDirectoryEntry {
 
     /// Parses a directory entry at `offset`.
     pub fn parse(buffer: &[u8], offset: usize) -> Result<Self, FileParseError> {
-        if buffer.len() < offset + Self::SIZE {
+        if offset
+            .checked_add(Self::SIZE)
+            .is_none_or(|end| end > buffer.len())
+        {
             return Err(FileParseError::BufferOverflow);
         }
 
@@ -141,7 +162,10 @@ impl ResourceDataEntry {
 
     /// Parses a data entry at `offset`.
     pub fn parse(buffer: &[u8], offset: usize) -> Result<Self, FileParseError> {
-        if buffer.len() < offset + Self::SIZE {
+        if offset
+            .checked_add(Self::SIZE)
+            .is_none_or(|end| end > buffer.len())
+        {
             return Err(FileParseError::BufferOverflow);
         }
 
@@ -162,7 +186,15 @@ impl ResourceTree {
         rva_to_offset: impl Fn(u32) -> Result<usize, FileParseError>,
     ) -> Result<Self, FileParseError> {
         let mut ancestors = Vec::new();
-        let root = parse_node(buffer, offset, offset, &rva_to_offset, &mut ancestors)?;
+        let mut work = buffer.len() / ResourceDirectoryEntry::SIZE + 1;
+        let root = parse_node(
+            buffer,
+            offset,
+            offset,
+            &rva_to_offset,
+            &mut ancestors,
+            &mut work,
+        )?;
         Ok(ResourceTree { offset, root })
     }
 }
@@ -173,13 +205,21 @@ fn parse_node(
     offset: usize,
     rva_to_offset: &impl Fn(u32) -> Result<usize, FileParseError>,
     ancestors: &mut Vec<usize>,
+    work: &mut usize,
 ) -> Result<ResourceDirectoryNode, FileParseError> {
     const MAX_RESOURCE_DEPTH: usize = 256;
     if ancestors.len() >= MAX_RESOURCE_DEPTH || ancestors.contains(&offset) {
         return Err(FileParseError::InvalidFileFormat);
     }
     ancestors.push(offset);
-    let result = parse_node_inner(buffer, resource_base, offset, rva_to_offset, ancestors);
+    let result = parse_node_inner(
+        buffer,
+        resource_base,
+        offset,
+        rva_to_offset,
+        ancestors,
+        work,
+    );
     ancestors.pop();
     result
 }
@@ -190,6 +230,7 @@ fn parse_node_inner(
     offset: usize,
     rva_to_offset: &impl Fn(u32) -> Result<usize, FileParseError>,
     ancestors: &mut Vec<usize>,
+    work: &mut usize,
 ) -> Result<ResourceDirectoryNode, FileParseError> {
     let header = ResourceDirectory::parse(buffer, offset)?;
     let named_count = header.number_of_named_entries.value as usize;
@@ -205,15 +246,24 @@ fn parse_node_inner(
         return Err(FileParseError::BufferOverflow);
     }
 
+    *work = work
+        .checked_sub(total + 1)
+        .ok_or(FileParseError::InvalidFileFormat)?;
     let mut entries = Vec::with_capacity(total);
     for i in 0..total {
         let entry_off = entries_offset + i * ResourceDirectoryEntry::SIZE;
         let entry = ResourceDirectoryEntry::parse(buffer, entry_off)?;
         let is_named = i < named_count;
         let (name, id) = if is_named {
+            if entry.name_or_id.value & 0x8000_0000 == 0 {
+                return Err(FileParseError::InvalidFileFormat);
+            }
             let name = read_resource_name(buffer, resource_base, entry.name_or_id.value)?;
             (Some(name), None)
         } else {
+            if entry.name_or_id.value & 0x8000_0000 != 0 {
+                return Err(FileParseError::InvalidFileFormat);
+            }
             (None, Some(entry.name_or_id.value as u16))
         };
 
@@ -222,7 +272,14 @@ fn parse_node_inner(
             .ok_or(FileParseError::BufferOverflow)?;
 
         if entry.is_directory() {
-            let directory = parse_node(buffer, resource_base, child_off, rva_to_offset, ancestors)?;
+            let directory = parse_node(
+                buffer,
+                resource_base,
+                child_off,
+                rva_to_offset,
+                ancestors,
+                work,
+            )?;
             entries.push(ResourceEntry::Directory {
                 name,
                 id,
@@ -253,9 +310,9 @@ fn read_resource_name(
     name_offset: u32,
 ) -> Result<String, FileParseError> {
     let off = resource_base
-        .checked_add(name_offset as usize)
+        .checked_add((name_offset & 0x7fff_ffff) as usize)
         .ok_or(FileParseError::BufferOverflow)?;
-    if buffer.len() < off + 2 {
+    if off.checked_add(2).is_none_or(|end| end > buffer.len()) {
         return Err(FileParseError::BufferOverflow);
     }
     let length = u16::from_le_bytes([buffer[off], buffer[off + 1]]) as usize;

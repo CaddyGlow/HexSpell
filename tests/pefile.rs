@@ -1,4 +1,4 @@
-#![cfg(feature = "std")]
+#![cfg(all(feature = "std", feature = "pe", feature = "common"))]
 
 use std::io::Write;
 use std::process::{Command, Stdio};

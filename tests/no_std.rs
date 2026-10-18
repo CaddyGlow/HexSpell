@@ -1,13 +1,17 @@
 //! In-memory operations run against both the std and no_std library builds.
+#[cfg(feature = "elf")]
+use hexspell::elf::ELF;
+#[cfg(feature = "macho")]
+use hexspell::macho::MachO;
+#[cfg(feature = "pe")]
+use hexspell::pe::PE;
 use hexspell::{
-    elf::ELF,
     errors::FileParseError,
     field::{ByteOrder, Field},
-    macho::MachO,
-    pe::PE,
 };
 
 #[test]
+#[cfg(feature = "pe")]
 fn pe_fixtures_parse_and_edit_without_file_apis() {
     for bytes in [
         include_bytes!("samples/sample1.exe").as_slice(),
@@ -27,9 +31,15 @@ fn pe_fixtures_parse_and_edit_without_file_apis() {
 }
 
 #[test]
-fn elf_and_macho_fixtures_parse_without_file_apis() {
+#[cfg(feature = "elf")]
+fn elf_fixtures_parse_without_file_apis() {
     let elf = ELF::from_buffer(include_bytes!("samples/linux").to_vec()).unwrap();
     assert!(!elf.section_headers.is_empty());
+}
+
+#[test]
+#[cfg(feature = "macho")]
+fn macho_fixtures_parse_without_file_apis() {
     let macho = MachO::from_buffer(include_bytes!("samples/machO-OSX-x86-ls").to_vec()).unwrap();
     assert!(!macho.segments.is_empty());
     assert!(!macho.linked_dylibs().unwrap().is_empty());
@@ -49,4 +59,30 @@ fn errors_and_fields_use_core_traits() {
         .update_with(&mut bytes, 0x12345678, ByteOrder::Little)
         .unwrap();
     assert_eq!(bytes, [0x78, 0x56, 0x34, 0x12]);
+}
+
+#[test]
+#[cfg(all(feature = "pe", feature = "write"))]
+fn generated_images_use_only_in_memory_apis() {
+    use hexspell::pe::{
+        build::{ImageKind, PeBuilder, SectionSpec, Target},
+        section::{CODE, EXECUTE, READ},
+    };
+
+    for target in [Target::X86, Target::X64] {
+        let mut builder = PeBuilder::new(target, ImageKind::Executable);
+        let text = builder
+            .add_section(SectionSpec::new(".text", vec![0xc3], CODE | EXECUTE | READ))
+            .unwrap();
+        let entry = builder.define_symbol(&text, 0).unwrap();
+        builder.set_entry_point(&entry).unwrap();
+        let (image, report) = builder.build_with_layout().unwrap();
+        assert_eq!(
+            image.optional_header.entry_point.value,
+            report.symbol(&entry).unwrap().rva
+        );
+        let reparsed = PE::from_slice(&image.buffer).unwrap();
+        assert_eq!(reparsed.section_data(0).unwrap()[0], 0xc3);
+        assert_eq!(builder.build().unwrap().buffer, image.buffer);
+    }
 }

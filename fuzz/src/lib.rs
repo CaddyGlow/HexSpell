@@ -5,6 +5,9 @@ use hexspell::{
     pe::{self, PE},
 };
 
+mod signatures;
+pub use signatures::{signature_seeds, signatures};
+
 /// Maximum file size accepted by a harness (1 MiB).
 pub const INPUT_LIMIT: usize = 1 << 20;
 /// Maximum streamed entries visited per table.
@@ -24,6 +27,8 @@ pub fn parse(data: &[u8]) {
     if data.len() > INPUT_LIMIT {
         return;
     }
+    let _ = macho::dyld::decode_chained_fixups(data);
+    let _ = elf::signature::AppendedSignature::parse(data);
     if let Ok(view) = pe::view::PeHeaders::parse(data) {
         let _ = view.magic();
         for i in 0..16 {
@@ -100,6 +105,9 @@ pub fn parse(data: &[u8]) {
         let _ = pe.load_config();
         let _ = pe.resources();
         let _ = pe.certificates();
+        let _ = owned
+            .owned_certificates()
+            .and_then(|table| table.serialize());
         let _ = pe.clr();
         let _ = pe.coff_symbols();
         let _ = pe.rich_header();
@@ -126,6 +134,11 @@ pub fn parse(data: &[u8]) {
     assert_eq!(borrowed.is_ok(), owned.is_ok());
     if let Ok(elf) = borrowed {
         let owned = owned.unwrap();
+        let _ = elf.appended_signature();
+        if let Ok(Some(signature)) = elf.appended_signature() {
+            let _ = signature.data(elf.buffer);
+            let _ = signature.signed_data(elf.buffer);
+        }
         assert_eq!(elf.buffer, owned.buffer);
         assert_eq!(elf.section_headers.len(), owned.section_headers.len());
         assert_eq!(elf.program_headers.len(), owned.program_headers.len());
@@ -174,6 +187,14 @@ fn parse_macho(data: &[u8]) {
     assert_eq!(borrowed.is_ok(), owned.is_ok());
     if let Ok(macho) = borrowed {
         let owned = owned.unwrap();
+        assert_eq!(
+            macho.code_signature().is_ok(),
+            owned.code_signature().is_ok()
+        );
+        assert_eq!(
+            macho.code_signature_data().ok(),
+            owned.code_signature_data().ok()
+        );
         assert_eq!(macho.buffer, owned.buffer);
         assert_eq!(macho.load_commands.len(), owned.load_commands.len());
         assert_eq!(macho.sections.len(), owned.sections.len());
@@ -257,7 +278,14 @@ pub fn run(target: &str, data: &[u8]) -> Result<(), &'static str> {
     match target {
         "parse" => parse(data),
         "roundtrip" => roundtrip(data),
-        _ => return Err("target must be parse or roundtrip"),
+        "generation" => generation(data),
+        "runtime-generation" => runtime_generation(data),
+        "signatures" => signatures(data),
+        _ => {
+            return Err(
+                "target must be parse, roundtrip, generation, runtime-generation or signatures",
+            )
+        }
     }
     Ok(())
 }
@@ -297,4 +325,184 @@ pub fn synthetic_seeds() -> Vec<(String, Vec<u8>)> {
         }
     }
     seeds
+}
+
+/// Exercise bounded owned specifications and transactional payload edits.
+/// Virtual extents and payload allocations are capped independently of input length.
+pub fn generation(data: &[u8]) {
+    use elf::build::{Binding, ElfBuilder, SectionSpec as ElfSection, SegmentSpec as ElfSegment};
+    use macho::build::{
+        MachOBuilder, SectionSpec as MachSection, SegmentSpec as MachSegment, Version,
+    };
+    if data.len() > INPUT_LIMIT {
+        return;
+    }
+    runtime_generation(data);
+    signatures::generation(data);
+    let payload = &data[..data.len().min(256)];
+    let selector = data.first().copied().unwrap_or(0);
+    let mut elf = ElfBuilder::new(elf::build::Target::LinuxX86_64);
+    let code = elf.add_segment(ElfSegment::RX).unwrap();
+    let section = elf
+        .add_section(Some(&code), ElfSection::new(".text", vec![0xc3]))
+        .unwrap();
+    let symbol = elf
+        .define_symbol("_start", &section, 0, 1, Binding::Global)
+        .unwrap();
+    elf.set_entry(&symbol).unwrap();
+    let mut spec = ElfSection::new(".custom", payload.to_vec());
+    spec.alignment = 1 << (selector % 13);
+    elf.add_section(None, spec).unwrap();
+    let mut image = elf.build().unwrap();
+    assert_eq!(image.buffer, elf.build().unwrap().buffer);
+    parse(&image.buffer);
+    let index = image
+        .section_headers
+        .iter()
+        .enumerate()
+        .find_map(|(i, _)| (image.section_name(i).ok().as_deref() == Some(".custom")).then_some(i))
+        .unwrap();
+    let before = image.buffer.clone();
+    {
+        let mut edit =
+            elf::edit::ElfEdit::new(&mut image, elf::edit::BuildIdPolicy::Reject).unwrap();
+        assert!(edit
+            .replace_custom_section(index, &vec![0; payload.len() + 1])
+            .is_err());
+    }
+    assert_eq!(before, image.buffer);
+    let mut edit = elf::edit::ElfEdit::new(&mut image, elf::edit::BuildIdPolicy::Reject).unwrap();
+    edit.replace_custom_section(index, &payload[..payload.len() / 2])
+        .unwrap();
+    edit.commit().unwrap();
+    parse(&image.buffer);
+
+    let target = if selector & 1 == 0 {
+        macho::build::Target::X86_64
+    } else {
+        macho::build::Target::Arm64
+    };
+    let mut macho = MachOBuilder::new(
+        target,
+        Version {
+            major: 13,
+            minor: 0,
+            patch: 0,
+        },
+    );
+    let segment = macho.add_segment(MachSegment::new("__CUSTOM", 1)).unwrap();
+    let mut spec = MachSection::new("__data", payload.to_vec());
+    spec.alignment = u32::from(selector % 10);
+    macho.add_section(&segment, spec).unwrap();
+    let mut image = macho.build().unwrap();
+    assert_eq!(image.buffer, macho.build().unwrap().buffer);
+    parse(&image.buffer);
+    let before = image.buffer.clone();
+    {
+        let mut edit = macho::edit::MachOEdit::new(&mut image).unwrap();
+        assert!(edit
+            .replace_custom_section(0, &vec![0; payload.len() + 1])
+            .is_err());
+    }
+    assert_eq!(before, image.buffer);
+    let mut edit = macho::edit::MachOEdit::new(&mut image).unwrap();
+    edit.replace_custom_section(0, &payload[..payload.len() / 2])
+        .unwrap();
+    edit.commit().unwrap();
+    parse(&image.buffer);
+}
+
+/// Bound runtime metadata and transactional growth independently of file fuzzing.
+pub fn runtime_generation(data: &[u8]) {
+    use elf::build::{Binding, ElfBuilder, ImageKind, SectionSpec, SegmentSpec, Target};
+    let bytes = &data[..data.len().min(64)];
+    let mut builder = ElfBuilder::new(Target::LinuxX86_64);
+    builder.set_image_kind(ImageKind::SharedObject);
+    let text = builder.add_segment(SegmentSpec::RX).unwrap();
+    let section = builder
+        .add_section(Some(&text), SectionSpec::new(".text", vec![0xc3]))
+        .unwrap();
+    let function = builder
+        .define_symbol("function", &section, 0, 1, Binding::Global)
+        .unwrap();
+    builder.add_initializer(&function).unwrap();
+    builder.add_finalizer(&function).unwrap();
+    let tls = builder
+        .add_tls_template(vec![0; bytes.len().max(1)], 8)
+        .unwrap();
+    builder.add_tls_address_slot(&tls, 0).unwrap();
+    builder
+        .add_section(None, SectionSpec::new(".custom", bytes.to_vec()))
+        .unwrap();
+    let mut image = builder.build().unwrap();
+    assert_eq!(image.buffer, builder.build().unwrap().buffer);
+    parse(&image.buffer);
+    let index = (0..image.section_headers.len())
+        .find(|&i| image.section_name(i).ok().as_deref() == Some(".custom"))
+        .unwrap();
+    let mut edit = elf::edit::ElfEdit::new(&mut image, elf::edit::BuildIdPolicy::Reject).unwrap();
+    edit.grow_custom_section(index, &vec![0x55; bytes.len() + 8])
+        .unwrap();
+    edit.add_custom_section(".new", bytes).unwrap();
+    edit.commit().unwrap();
+    parse(&image.buffer);
+    let unsigned = image.buffer.clone();
+    image
+        .set_appended_signature(if bytes.is_empty() { &[0] } else { bytes })
+        .unwrap();
+    let signature = image.appended_signature().unwrap().unwrap();
+    assert_eq!(signature.signed_data(&image.buffer).unwrap(), unsigned);
+    parse(&image.buffer);
+    image.remove_appended_signature().unwrap();
+    assert_eq!(image.buffer, unsigned);
+
+    use macho::build::{
+        FixupKind, MachOBuilder, SectionSpec as MachSection, SegmentSpec as MachSegment, Version,
+    };
+    let target = if data.first().copied().unwrap_or(0) & 1 == 0 {
+        macho::build::Target::X86_64
+    } else {
+        macho::build::Target::Arm64
+    };
+    let mut builder = MachOBuilder::new(
+        target,
+        Version {
+            major: 13,
+            minor: 0,
+            patch: 0,
+        },
+    );
+    builder.enable_dyld().unwrap();
+    let text = builder.add_segment(MachSegment::new("__TEXT", 5)).unwrap();
+    let mut spec = MachSection::new("__text", vec![0xc0, 0x03, 0x5f, 0xd6]);
+    spec.alignment = 2;
+    let code = builder.add_section(&text, spec).unwrap();
+    builder.set_entry(&code, 0).unwrap();
+    let function = builder.add_symbol("_function", &code, 0).unwrap();
+    let segment = builder.add_segment(MachSegment::new("__DATA", 3)).unwrap();
+    let dependency = builder
+        .add_dependency("/usr/lib/libSystem.B.dylib")
+        .unwrap();
+    let mut spec = MachSection::new("__pointers", vec![0; 16]);
+    spec.alignment = 3;
+    let pointers = builder.add_section(&segment, spec).unwrap();
+    builder
+        .add_import("_getpid", &dependency, &pointers, 0)
+        .unwrap();
+    builder
+        .add_fixup(&pointers, 8, &function, 0, FixupKind::Va64)
+        .unwrap();
+    builder
+        .add_initializers(&segment, core::slice::from_ref(&function))
+        .unwrap();
+    builder
+        .add_terminators(&segment, core::slice::from_ref(&function))
+        .unwrap();
+    builder
+        .add_thread_local(&segment, &dependency, vec![0; bytes.len().max(1)], 3)
+        .unwrap();
+    let image = builder.build().unwrap();
+    assert_eq!(image.buffer, builder.build().unwrap().buffer);
+    assert!(image.chained_fixups().unwrap().is_some());
+    parse(&image.buffer);
 }

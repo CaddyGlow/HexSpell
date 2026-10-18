@@ -3,6 +3,8 @@
 //! HexSpell is a collection of helpers for inspecting and mutating executable formats. It focuses
 //! on providing a small, predictable API that mirrors the underlying file layout so that programs
 //! can tweak headers or sections without rebuilding the whole file.
+//! The opt-in `write` feature enables builders and transactional editing for each
+//! enabled format, including lossless PE resource serialization.
 //!
 //! The crate is split into dedicated modules for the **PE**, **ELF**, and **Mach-O** formats. Each
 //! module exposes types for reading a binary from disk, modifying its fields in place, and writing
@@ -14,16 +16,23 @@
 //!
 //! # Feature modes
 //!
-//! The default `std` feature enables file I/O. With `default-features = false`, the crate
-//! uses `no_std` plus `alloc`: in-memory parsing, editing and validation remain available.
-//! Owned buffers and parsed tables require an allocator. Borrowed PE header inspection
-//! through [`pe::view::PeHeaders`] does not allocate.
+//! Defaults enable `std`, `pe`, `elf`, `macho`, and the `common` helper interface.
+//! Disable defaults and select individual formats for `no_std` plus `alloc`.
+//! The `write` feature enables generation/editing without enabling any formats.
+//! Combine it with `pe`, `elf`, or `macho`; it also works without `std`.
+//! The independent opt-in `pe-reconstruct` feature with `pe` enables
+//! `PE::from_memory_image` for converting RVA-addressed snapshots to file layout.
+//! Core fields, errors, and byte utilities are always available. Owned buffers
+//! and parsed tables require an allocator; `pe::view::PeHeaders` does not allocate.
 //!
 //! ```
+//! # #[cfg(feature = "pe")]
+//! # {
 //! use hexspell::pe::view::PeHeaders;
 //! let bytes = include_bytes!("../tests/samples/sample1.exe");
 //! let headers = PeHeaders::parse(bytes).unwrap();
 //! assert!(headers.coff.number_of_sections.value > 0);
+//! # }
 //! ```
 //!
 //! # Examples
@@ -31,7 +40,7 @@
 //! Read a PE image and inspect the entry point:
 //!
 //! ```
-//! # #[cfg(feature = "std")]
+//! # #[cfg(all(feature = "std", feature = "pe"))]
 //! # {
 //! use hexspell::pe::PE;
 //!
@@ -44,7 +53,7 @@
 //! Patch a header field in place (`Field` carries the real file offset):
 //!
 //! ```
-//! # #[cfg(feature = "std")]
+//! # #[cfg(all(feature = "std", feature = "pe"))]
 //! # {
 //! use hexspell::pe::PE;
 //!
@@ -61,7 +70,7 @@
 //! Lazy parsers expose imports, exports, and other data directories on demand:
 //!
 //! ```
-//! # #[cfg(feature = "std")]
+//! # #[cfg(all(feature = "std", feature = "pe"))]
 //! # {
 //! use hexspell::pe::PE;
 //!
@@ -74,10 +83,10 @@
 //! # }
 //! ```
 //!
-//! ELF endianness comes from `ei_data`; use [`elf::ELF::byte_order`] when patching:
+//! ELF endianness comes from `ei_data`; use `elf::ELF::byte_order` when patching:
 //!
 //! ```
-//! # #[cfg(feature = "std")]
+//! # #[cfg(all(feature = "std", feature = "elf"))]
 //! # {
 //! use hexspell::elf::ELF;
 //!
@@ -92,7 +101,7 @@
 //! Mach-O segments and linked dylibs:
 //!
 //! ```
-//! # #[cfg(feature = "std")]
+//! # #[cfg(all(feature = "std", feature = "macho"))]
 //! # {
 //! use hexspell::macho::MachO;
 //!
@@ -106,7 +115,7 @@
 //! Write the patched buffer back to disk:
 //!
 //! ```no_run
-//! # #[cfg(feature = "std")]
+//! # #[cfg(all(feature = "std", feature = "pe"))]
 //! # {
 //! use hexspell::pe::PE;
 //!
@@ -122,14 +131,23 @@ extern crate alloc;
 // Standard
 pub mod errors;
 pub mod field;
+#[cfg(feature = "common")]
 pub mod reloc;
+#[cfg(feature = "common")]
 pub mod strings;
+#[cfg(all(not(feature = "common"), any(feature = "pe", feature = "elf")))]
+mod strings;
 pub mod utils;
+#[cfg(feature = "common")]
 pub mod validation;
+#[cfg(feature = "common")]
 pub mod write;
 
+#[cfg(feature = "elf")]
 pub mod elf; // ELF
+#[cfg(feature = "macho")]
 pub mod macho;
 /// Executable Formats
 /// ==================
+#[cfg(feature = "pe")]
 pub mod pe; // PE (Portable Executable) // Mach-O

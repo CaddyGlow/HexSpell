@@ -24,10 +24,23 @@ back to disk when you need to patch an executable.
 - **Multi-format** — PE (Windows), ELF (Linux), and Mach-O (macOS) in one crate.
 - **Parse and patch** — read entry points, sections, imports, exports, and more; update headers and write the file back with `write_file`.
 - **Structural edits** — insert sections and load segments, sync layout, apply relocations.
+- **PE generation** (`write` feature with `pe`) — construct x86/x64 EXEs and DLLs from section bytes, with imports, exports, relocations, TLS, and resources.
+- **PE memory reconstruction** (`pe-reconstruct` with `pe`) — convert a contiguous RVA-addressed snapshot into a file-aligned PE with `PE::from_memory_image`. See the [reconstruction guide](docs/guide.md#reconstructing-a-pe-memory-image).
+- **Resource editing** (`write` feature with `pe`) — edit lossless owned trees transactionally; helpers for manifests, strings, versions, and icons.
+- **ELF and Mach-O writers** (`elf,write`, `macho,write`) — owned construction, checked layouts, scoped dynamic linking, TLS/unwind metadata and transactional custom-data/FAT edits; Mach-O uses external signing. See the [generation guide](docs/guide.md#elf-and-mach-o-generation-and-transactional-editing) and [validation matrix](docs/elf-macho-generation-validation.md).
+- **Signature containers** (`write` with `pe`, `elf`, or `macho`) — edit PE certificate tables, Linux appended PKCS#7 trailers, and Mach-O signature blobs for external signers. See the [signing guide](docs/guide.md#signature-containers-and-external-signers).
 - **Lazy parsers** — imports, exports, TLS, exceptions, symbols, and other tables parsed on demand.
 - **Endianness-aware** — ELF and Mach-O byte order handled via `ByteOrder`.
 
 See [`docs/coverage.md`](docs/coverage.md) for exactly what is modeled per format.
+See the [PE generation guide](docs/guide.md#pe-generation-and-resource-editing) and
+the `pe_hello`, `pe_dll`, and Windows `pe_dll_load` examples for construction and validation.
+Formats (`pe`, `elf`, `macho`) and the public helper interface (`common`) have
+independent default-enabled features. The opt-in `write` feature enables construction
+and editing for the selected formats without enabling any formats itself. Use
+`features = ["write"]` with defaults, or `default-features = false,
+features = ["elf", "write"]` for just the ELF writer with `no_std + alloc`.
+See [feature selection and 1.2.2 migration](docs/guide.md#features-and-migrating-to-122).
 
 ## Installation
 
@@ -131,6 +144,7 @@ More runnable examples and per-format walkthroughs live in the [user guide](docs
 - [User guide](docs/guide.md) — design principles, per-format examples, error handling.
 - [Layout accessors](docs/layout.md) — `field()` / `field_mut()` on ELF/Mach-O layout enums.
 - [Coverage matrix](docs/coverage.md) — what is modeled vs not, per format.
+- [ELF and Mach-O creation and editing plan](docs/elf-macho-generation-plan.md) — supported writer profiles, implementation milestones, and validation gates.
 - [Changelog](CHANGELOG.md) — notable changes per release.
 
 ## Contributing
@@ -139,6 +153,37 @@ Issues and pull requests are welcome — [open an issue](https://github.com/M3st
 report a bug or discuss a change. Contributors and agents should follow the conventions in
 [`AGENTS.md`](AGENTS.md) (tests required, `cargo fmt` + `cargo test` before finishing, no runtime
 dependencies).
+
+### Test coverage
+
+Install [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and the LLVM
+tools for your Rust toolchain:
+
+```sh
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+```
+
+For a Nix-managed toolchain, provide matching LLVM tools through `LLVM_COV`
+and `LLVM_PROFDATA` if the shell does not include `llvm-tools-preview`.
+
+Collect coverage and generate local reports:
+
+```sh
+cargo llvm-cov --all-features --lib --tests --no-report
+mkdir -p coverage
+cargo llvm-cov report --ignore-filename-regex '(^|/)(tests|examples|benches)/' --lcov --output-path coverage/lcov.info
+cargo llvm-cov report --ignore-filename-regex '(^|/)(tests|examples|benches)/' --html --output-dir coverage
+cargo llvm-cov report --ignore-filename-regex '(^|/)(tests|examples|benches)/'
+```
+
+Open `coverage/html/index.html` to inspect covered and uncovered library lines.
+Reports stay in the ignored `coverage/` directory; nothing is uploaded.
+No minimum percentage is enforced.
+Coverage includes unit and integration tests with all features, including `write`.
+It excludes test/example/benchmark source files from the reported totals; doctests,
+ignored tests, fuzz harnesses, and platform-specific runtime acceptance scripts are
+not measured. This is separate from the [format coverage matrix](docs/coverage.md).
 
 ## License
 
@@ -151,7 +196,7 @@ Disable default features for `no_std + alloc`:
 
 ```toml
 [dependencies]
-hexspell = { git = "https://github.com/CaddyGlow/HexSpell", default-features = false }
+hexspell = { git = "https://github.com/CaddyGlow/HexSpell", default-features = false, features = ["pe", "elf", "macho", "common"] }
 ```
 
 In this mode, PE, ELF and Mach-O parsing from buffers, field edits, layout
