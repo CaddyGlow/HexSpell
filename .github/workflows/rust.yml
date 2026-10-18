@@ -134,7 +134,7 @@ jobs:
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@1.88.0
     - name: Check writer MSRV without dev dependencies
-      run: cargo check --lib --all-features --locked
+      run: cargo check --lib --all-features
 
   feature-matrix:
     runs-on: ubuntu-latest
