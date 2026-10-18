@@ -550,6 +550,32 @@ fn test_pe_insert_section_parsed_short_name_no_panic() {
     let _ = pe.insert_section_raw(parsed, vec![0x90; 4]);
 }
 
+/// insert_section on a file that ends before its own SizeOfHeaders must fail, not panic.
+#[test]
+fn test_pe_insert_section_truncated_headers_no_panic() {
+    let full = fs::read("tests/samples/sample1.exe").expect("read sample");
+    let mut pe = pe::PE::from_buffer(full).expect("parse sample");
+    let table_end = pe.sections.last().unwrap().characteristics.offset + 4;
+
+    // Header area nearly full (forces the header growth path) and a file that stops at the end
+    // of the section table, short of SizeOfHeaders.
+    let size_of_headers = table_end as u32 + 8;
+    pe.optional_header
+        .size_of_headers
+        .update(&mut pe.buffer, size_of_headers)
+        .expect("patch SizeOfHeaders");
+    let mut truncated = pe::PE::from_buffer(pe.buffer[..table_end].to_vec()).expect("parse");
+
+    let before = truncated.buffer.clone();
+    let result = truncated.insert_section(pe::section::NewSection {
+        name: ".new".into(),
+        data: vec![0x90; 16],
+        characteristics: 0x6000_0020,
+    });
+    assert!(result.is_err());
+    assert_eq!(truncated.buffer, before, "failed insert changed the buffer");
+}
+
 /// Parsing an invalid PE buffer should return an error
 #[test]
 fn test_pe_invalid_buffer() {

@@ -686,6 +686,20 @@ impl PE {
         shellcode: Vec<u8>,
     ) -> Result<(), FileParseError> {
         const SECTION_HEADER_SIZE: usize = 40;
+
+        // The header slot and the header area (padding is spliced in at SizeOfHeaders) must lie
+        // inside the file. Checked before anything is modified so a failure leaves the buffer as is.
+        let header_slot_end = new_section
+            .name
+            .offset
+            .checked_add(SECTION_HEADER_SIZE)
+            .ok_or(FileParseError::BufferOverflow)?;
+        if header_slot_end > self.buffer.len()
+            || self.optional_header.size_of_headers.value as usize > self.buffer.len()
+        {
+            return Err(FileParseError::BufferOverflow);
+        }
+
         let fixups = layout::FileOffsetFixups::capture(self)?;
         let mut file_edits = Vec::new();
 

@@ -37,6 +37,7 @@
     - *Fixed*: Reject inconsistent zero/nonzero security-directory pairs when reading certificates instead of reporting an unsigned image.
     - *Fixed*: Reparse the current buffer before appending certificates so stale cached directory fields cannot discard existing records.
     - *Fixed*: Mask resource-name high bits and check resource metadata/payload extents, aggregate traversal work, and certificate aliases before editing.
+    - *Fixed*: `insert_section` returns `BufferOverflow` instead of panicking when the file ends before the new section header slot or `SizeOfHeaders`; nothing is modified on failure.
     - *Fixed*: Place inserted sections after complete occupied raw/virtual extents; reject invalid alignment before mutation and include header growth/overlays in insertion plans.
     - *Fixed*: Reject resource edits whose declared directory slots extend beyond the physical optional header, and reparse edited bytes before committing. Reject overflowing insertion extents before mutation and named x86 import RVAs that collide with the ordinal flag.
     - *Documentation*: Document generation, resource editing, validation, and implementation milestones.
