@@ -12,7 +12,6 @@ use alloc::vec::Vec;
 
 use crate::errors;
 use crate::field::{Field, FixedBytes};
-use crate::utils::{extract_u16, extract_u32};
 
 /// Named PE section characteristic flags (subset).
 pub enum Characteristics {
@@ -175,21 +174,29 @@ impl PeSection {
     }
 
     /// Parses a section of a PE file from the given buffer and offset.
+    // Inlined with a single bounds check so callers build the 240-byte value in
+    // place instead of copying it out of the returned `Result`.
+    #[inline]
     pub fn parse_section(buffer: &[u8], offset: usize) -> Result<Self, errors::FileParseError> {
-        if offset.checked_add(40).is_none_or(|end| end > buffer.len()) {
-            return Err(errors::FileParseError::BufferOverflow);
-        }
+        let raw: &[u8; 40] = offset
+            .checked_add(40)
+            .and_then(|end| buffer.get(offset..end))
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or(errors::FileParseError::BufferOverflow)?;
+        let u32_at =
+            |at: usize| u32::from_le_bytes([raw[at], raw[at + 1], raw[at + 2], raw[at + 3]]);
+        let u16_at = |at: usize| u16::from_le_bytes([raw[at], raw[at + 1]]);
 
-        let name = FixedBytes::from_slice(&buffer[offset..offset + 8]);
-        let virtual_size = extract_u32(buffer, offset + 8)?;
-        let virtual_address = extract_u32(buffer, offset + 12)?;
-        let size_of_raw_data = extract_u32(buffer, offset + 16)?;
-        let pointer_to_raw_data = extract_u32(buffer, offset + 20)?;
-        let pointer_to_relocations = extract_u32(buffer, offset + 24)?;
-        let pointer_to_linenumbers = extract_u32(buffer, offset + 28)?;
-        let number_of_relocations = extract_u16(buffer, offset + 32)?;
-        let number_of_linenumbers = extract_u16(buffer, offset + 34)?;
-        let characteristics = extract_u32(buffer, offset + 36)?;
+        let name = FixedBytes::from_slice(&raw[..8]);
+        let virtual_size = u32_at(8);
+        let virtual_address = u32_at(12);
+        let size_of_raw_data = u32_at(16);
+        let pointer_to_raw_data = u32_at(20);
+        let pointer_to_relocations = u32_at(24);
+        let pointer_to_linenumbers = u32_at(28);
+        let number_of_relocations = u16_at(32);
+        let number_of_linenumbers = u16_at(34);
+        let characteristics = u32_at(36);
 
         Ok(PeSection {
             name: Field::new(name, offset, 8),

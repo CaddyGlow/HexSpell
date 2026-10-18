@@ -1728,3 +1728,74 @@ fn coff_section_relocations_preserve_fields_and_filter_by_rva() {
         Err(hexspell::errors::FileParseError::BufferOverflow)
     ));
 }
+
+#[test]
+fn parse_section_decodes_every_field_at_its_offset_and_checks_bounds() {
+    use hexspell::pe::section::PeSection;
+    // A distinct value in every field, placed at a nonzero offset.
+    let at = 13;
+    let mut buffer = vec![0xeeu8; at + 40];
+    buffer[at..at + 8].copy_from_slice(b".text\0\0\0");
+    for (field, value) in [8u32, 12, 16, 20, 24, 28, 36].into_iter().zip([
+        0x1111_1101u32,
+        0x2222_2202,
+        0x3333_3303,
+        0x4444_4404,
+        0x5555_5505,
+        0x6666_6606,
+        0x7777_7707,
+    ]) {
+        buffer[at + field as usize..at + field as usize + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    buffer[at + 32..at + 34].copy_from_slice(&0x8808u16.to_le_bytes());
+    buffer[at + 34..at + 36].copy_from_slice(&0x9909u16.to_le_bytes());
+
+    // The header ends exactly at the end of the buffer.
+    let s = PeSection::parse_section(&buffer, at).unwrap();
+    assert_eq!((s.name_str(), s.name.offset, s.name.size), (".text", at, 8));
+    let words = [
+        (&s.virtual_size, 0x1111_1101, 8),
+        (&s.virtual_address, 0x2222_2202, 12),
+        (&s.size_of_raw_data, 0x3333_3303, 16),
+        (&s.pointer_to_raw_data, 0x4444_4404, 20),
+        (&s.pointer_to_relocations, 0x5555_5505, 24),
+        (&s.pointer_to_linenumbers, 0x6666_6606, 28),
+        (&s.characteristics, 0x7777_7707, 36),
+    ];
+    for (field, value, offset) in words {
+        assert_eq!(
+            (field.value, field.offset, field.size),
+            (value, at + offset, 4)
+        );
+    }
+    assert_eq!(
+        (
+            s.number_of_relocations.value,
+            s.number_of_relocations.offset,
+            s.number_of_relocations.size
+        ),
+        (0x8808, at + 32, 2)
+    );
+    assert_eq!(
+        (
+            s.number_of_linenumbers.value,
+            s.number_of_linenumbers.offset,
+            s.number_of_linenumbers.size
+        ),
+        (0x9909, at + 34, 2)
+    );
+
+    // One byte short, past the end, and offsets that overflow are rejected.
+    for (bytes, offset) in [
+        (&buffer[..at + 39], at),
+        (&buffer[..], at + 1),
+        (&buffer[..], buffer.len()),
+        (&buffer[..], usize::MAX - 39),
+        (&buffer[..], usize::MAX),
+    ] {
+        assert!(matches!(
+            PeSection::parse_section(bytes, offset),
+            Err(FileParseError::BufferOverflow)
+        ));
+    }
+}
